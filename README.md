@@ -135,6 +135,139 @@ public function import(#[FromBody] array $users): void { /* ... */ }
 
 Problems in a body are reported without the parameter's name: `name`, `addresses.1.city`.
 
+## Saving data
+
+What comes in is a DTO, and what goes out is what a query asks for. An entity doesn't get built from a request, so a client can't set anything the DTO doesn't declare, such as `id`. `#[FromBody] App\Entity\Type $type` gets `422`. These examples use [`phloxcz/entity-database`](../phlox-entity-database) and [`phloxcz/api-query`](../phlox-api-query), and [`phlox-api-sample`](../phlox-api-sample) has them running.
+
+```php
+#[Dto]
+final readonly class SaveType
+{
+    public function __construct(
+        #[Length(min: 1, max: 50)] public string $ident,
+        #[Length(max: 100)] public ?string $name = null,
+    ) {
+    }
+}
+```
+
+### POST: create
+
+```php
+#[HttpPost]
+#[Route('')]
+#[Response(201)]
+public function create(#[FromBody] SaveType $type, #[QueryOf(TypeResource::class, single: true)] ?Query $query = null): ?array
+{
+    try {
+        $created = $this->db->table('type')->insert([
+            'ident' => $type->ident,     // keys are names of columns
+            'name' => $type->name,
+        ]);
+    } catch (UniqueConstraintViolationException) {
+        throw new ApiException(409, "Type '{$type->ident}' already exists.", httpCode: 409);
+    }
+
+    $this->response->setCode(201);
+
+    return $this->processor->process($created, $query);
+}
+```
+
+To not repeat the names of columns, let an entity translate them:
+
+```php
+$new = new Type();
+$new->ident = $type->ident;
+$new->name = $type->name;
+$created = $this->db->table('type')->insert($new->toModifiedArrayDb());
+```
+
+`insert()` of one row gives its entity, also on Firebird. On a table without a primary key it gives the number of rows, and on SQLite, the key has to be `AUTOINCREMENT` for it, or be given.
+
+### PUT: replace
+
+What isn't sent gets its default from the DTO, so leaving out `name` above sets it to `null`, and leaving out `ident` is `422`.
+
+```php
+#[HttpPut]
+#[Route('{id:int}')]
+public function replace(int $id, #[FromBody] SaveType $type, #[QueryOf(TypeResource::class, single: true)] ?Query $query = null): ?array
+{
+    $entity = $this->findType($id);
+    $entity->ident = $type->ident;
+    $entity->name = $type->name;
+    $entity->saveModified();         // writes only the columns that changed
+
+    return $this->processor->process($entity, $query);
+}
+
+private function findType(int $id): Type
+{
+    return $this->db->table('type')->get($id)
+        ?? throw new ApiException(404, 'Type not found.', httpCode: 404);
+}
+```
+
+A private method isn't an endpoint. To keep a record within what the client may reach, limit the selection first: `$this->db->table('tasks')->where('project_id', $projectId)->get($id)`.
+
+### PATCH: change what was sent
+
+The same DTO, through a `Patch`, which tells a field left out from one sent as `null`. See [Changing only what was sent](../phlox-api-core#changing-only-what-was-sent).
+
+```php
+#[HttpPatch]
+#[Route('{id:int}')]
+public function change(int $id, #[FromBody, PatchOf(SaveType::class)] Patch $changes, #[QueryOf(TypeResource::class, single: true)] ?Query $query = null): ?array
+{
+    $entity = $changes->applyTo($this->findType($id));
+    $entity->saveModified();
+
+    return $this->processor->process($entity, $query);
+}
+```
+
+`applyTo()` needs the fields to have the names of the properties of the entity. Where they differ, or for what needs care, ask one by one: `if ($changes->has('name')) { ... }`.
+
+### Collections
+
+A DTO holds a list by a docblock, see [Collections](../phlox-api-core#collections). To save all of it or none of it, use a transaction:
+
+```php
+/** @return array{ids: list<int>} */
+#[HttpPost]
+#[Route('batch')]
+#[Response(201)]
+public function batch(#[FromBody] ImportTypes $import): array
+{
+    $ids = $this->db->transaction(static function (Explorer $db) use ($import): array {
+        $ids = [];
+        foreach ($import->types as $type) {
+            $ids[] = $db->table('type')->insert(['ident' => $type->ident, 'name' => $type->name])->id;
+        }
+        return $ids;
+    });
+
+    $this->response->setCode(201);
+
+    return ['ids' => $ids];
+}
+```
+
+### The answer
+
+| What happens | Status |
+|---|---|
+| Created, by `setCode(201)` | `201` |
+| Saved, with a record to return | `200` |
+| Saved, with nothing returned | `204` |
+| A value breaking the rules of the DTO, with a path to each | `422` |
+| A record not found, by your `ApiException` | `404` |
+| A unique value already taken, by your `catch` | `409` |
+| Any other failure of the database | `500`, and it's logged |
+
+A `Query` in a method with `#[FromBody]` comes from the URL, by the name of its parameter: `?query[select]=id,name`. A plain `?select=` isn't a parameter of the method, so it's ignored.
+
 ## Responses
 
 | The controller | The client gets |
