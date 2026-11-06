@@ -1,5 +1,7 @@
 # phloxcz/rest-api
 
+**English** | [Česky](README.cs.md)
+
 **REST server for [Nette](https://nette.org).**
 
 API controllers are ordinary DI services. Their routes, authorization and parameters are described by PHP attributes and native types, and the route table is compiled into the DI container, so nothing is reflected or cached at runtime to find a route.
@@ -8,7 +10,7 @@ API controllers are ordinary DI services. Their routes, authorization and parame
 
 ## Requirements
 
-PHP 8.4+ and [`phloxcz/api-core`](../phlox-api-core), which documents controllers, authorization and parameter types.
+PHP 8.4+ and [`phloxcz/api-core`](https://github.com/phloxcz/api-core), which documents controllers, authorization and parameter types.
 
 Optional: `nette/application` for returning `Nette\Application\Response` objects.
 
@@ -101,7 +103,7 @@ The order of controllers and methods doesn't matter. Literal routes are tried fi
 
 ## Parameters and bodies
 
-Parameters are filled from the path, then the query, then a JSON body of `POST`, `PUT` and `PATCH`, and the earlier source wins: a client can't override `{id}` from the path with a query parameter or a body field. Conversions are described in [`phloxcz/api-core`](../phlox-api-core#parameters).
+Parameters are filled from the path, then the query, then a JSON body of `POST`, `PUT` and `PATCH`, and the earlier source wins: a client can't override `{id}` from the path with a query parameter or a body field. Conversions are described in [`phloxcz/api-core`](https://github.com/phloxcz/api-core#parameters).
 
 A missing `Content-Type` counts as `application/json`, but a body which isn't JSON then simply doesn't fill any parameters, unless the method has `#[FromBody]`. `application/*+json` is JSON too. A body of any other type isn't read at all unless the method asks for it, so a controller can stream a large upload from `php://input` itself. `$this->jsonData` holds the decoded body; with `jsonForceArray: false` it's made of objects instead of arrays.
 
@@ -120,7 +122,7 @@ public function upload(int $id, #[FromBody] string $content): void { /* ... */ }
 
 `#[Consumes]` lists accepted content types. A body of another type gets `415`. A method with `#[FromBody]` and no `#[Consumes]` accepts `application/json`; a method with neither accepts anything.
 
-A DTO can be the whole body or one of the parameters. See [DTOs](../phlox-api-core#dtos).
+A DTO can be the whole body or one of the parameters. See [DTOs](https://github.com/phloxcz/api-core#dtos).
 
 ```php
 #[HttpPost]
@@ -137,7 +139,7 @@ Problems in a body are reported without the parameter's name: `name`, `addresses
 
 ## Saving data
 
-What comes in is a DTO, and what goes out is what a query asks for. An entity doesn't get built from a request, so a client can't set anything the DTO doesn't declare, such as `id`. `#[FromBody] App\Entity\Type $type` gets `422`. These examples use [`phloxcz/entity-database`](../phlox-entity-database) and [`phloxcz/api-query`](../phlox-api-query), and [`phlox-api-sample`](../phlox-api-sample) has them running.
+What comes in is a DTO, and what goes out is what a query asks for. An entity doesn't get built from a request, so a client can't set anything the DTO doesn't declare, such as `id`. `#[FromBody] App\Entity\Type $type` gets `422`. These examples use [`phloxcz/entity-database`](https://github.com/phloxcz/entity-database) and [`phloxcz/api-query`](https://github.com/phloxcz/api-query), and [`phlox-api-sample`](https://github.com/phloxcz/api-sample) has them running.
 
 ```php
 #[Dto]
@@ -213,7 +215,7 @@ A private method isn't an endpoint. To keep a record within what the client may 
 
 ### PATCH: change what was sent
 
-The same DTO, through a `Patch`, which tells a field left out from one sent as `null`. See [Changing only what was sent](../phlox-api-core#changing-only-what-was-sent).
+The same DTO, through a `Patch`, which tells a field left out from one sent as `null`. See [Changing only what was sent](https://github.com/phloxcz/api-core#changing-only-what-was-sent).
 
 ```php
 #[HttpPatch]
@@ -231,7 +233,7 @@ public function change(int $id, #[FromBody, PatchOf(SaveType::class)] Patch $cha
 
 ### Collections
 
-A DTO holds a list by a docblock, see [Collections](../phlox-api-core#collections). To save all of it or none of it, use a transaction:
+A DTO holds a list by a docblock, see [Collections](https://github.com/phloxcz/api-core#collections). To save all of it or none of it, use a transaction:
 
 ```php
 /** @return array{ids: list<int>} */
@@ -297,7 +299,7 @@ The content type and JSON syntax are checked before authorization, so these two 
 
 ## OpenAPI
 
-Every endpoint gets an OpenAPI 3.1 document, generated when the container compiles from the same routes the server runs on. In debug mode it's published at `/api/openapi.json` and `/api/openapi.yaml`. What it's made of is described in [`phloxcz/api-core`](../phlox-api-core#documentation).
+Every endpoint gets an OpenAPI 3.1 document, generated when the container compiles from the same routes the server runs on. In debug mode it's published at `/api/openapi.json` and `/api/openapi.yaml`. What it's made of is described in [`phloxcz/api-core`](https://github.com/phloxcz/api-core#documentation).
 
 ```neon
 restApi:
@@ -356,11 +358,11 @@ An `OPTIONS` request gets `204`, unless a method declares `#[HttpOptions]` for t
 | `endpoints.<name>.accessControl` | no CORS | `allowedOrigins`, `allowCredentials`, `allowMethods`, `allowHeaders`, `exposeHeaders`, `maxAge` |
 | `endpoints.<name>.documentation` | generated, published in debug mode | see [OpenAPI](#openapi) |
 
-An endpoint's name can contain a slash, such as `api/v2`, and the longest match wins. It can live in one application with [`phloxcz/rpc-api`](../phlox-rpc-api), even under the same name.
+An endpoint's name can contain a slash, such as `api/v2`, and the longest match wins. It can live in one application with [`phloxcz/rpc-api`](https://github.com/phloxcz/rpc-api), even under the same name.
 
 ## Migrating from abrad450/api-server-nette
 
-The whole way is in [`MIGRATION.md`](../phlox-api-core/MIGRATION.md). What concerns this package:
+The whole way is in [`MIGRATION.md`](https://github.com/phloxcz/api-core/blob/master/MIGRATION.md). What concerns this package:
 
 Namespaces:
 
@@ -389,7 +391,7 @@ Changes that need checking in an existing project:
 - **The bootstrap runs before the API.** Code after `createContainer()` now also runs for API requests, including anything like a redirect or a maintenance mode. `index.php` has to call `Application::run()`.
 - **Dates and times:** a time zone alone, such as `x` or `utc`, is now refused instead of meaning the current time.
 - **Documentation:** the `openapi` config with `content` and `outputPath` is gone. Move `info` and `securitySchemes` to `documentation`, anything else to `documentation.extra`, and write files with `OpenApi::toYaml()` if you need them. `#[Response]` moves to `Phlox\RestApi\Attributes\Response`. `#[Parameter]` moves to `Phlox\ApiCore\Attributes\Parameter` and is deprecated, because a docblock or `#[Schema]` says the same. The array notation such as `['object', ['id' => 'int']]` keeps working in both, but is deprecated as well in favour of DTOs and docblock types.
-- **The query language** moved to [`phloxcz/api-query`](../phlox-api-query#migrating-from-abrad450api-server-nette), including `$this->processor`.
+- **The query language** moved to [`phloxcz/api-query`](https://github.com/phloxcz/api-query#migrating-from-abrad450api-server-nette), including `$this->processor`.
 
 ## License
 
