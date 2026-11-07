@@ -324,7 +324,7 @@ Assert::same(
     $bad->data['error']['fields'],
     'no parameter name in the paths of a body',
 );
-Assert::same(-32602, $bad->data['error']['code']);
+Assert::same(422, $bad->data['error']['code']);
 
 $notObject = $openDispatcher->handle('api', 'POST', 'open', [], 'application/json', '[1,2]');
 Assert::same(['input' => 'must be an object.'], $notObject->data['error']['fields']);
@@ -334,3 +334,15 @@ Assert::same(['1.name' => 'must have at least 2 characters.'], $list->data['erro
 
 $named = $openDispatcher->handle('api', 'PUT', 'open/named', [], 'application/json', '{"input":{"name":"Ann","email":"a@b.cz"}}');
 Assert::same(['name' => 'Ann', 'email' => 'a@b.cz'], $named->data, 'a DTO can be one of the parameters');
+
+// --- Responses checked against the document, as tests of an API do
+
+$checker = Phlox\RestApi\Testing\OpenApiChecker::of($openApi, 'api', '/api');
+$users = $dispatcher->handle('api', 'GET', 'users', ['page' => '3']);
+Assert::same([], $checker->check('GET', '/api/users?page=3', 200, 'application/json', json_encode($users->data)));
+Assert::same(1, $checker->checked);
+Assert::same(['GET /api/users 200: $[0].id: "3" is not integer'], $checker->check('GET', '/api/users', 200, 'application/json', '[{"id":"3","name":"Ann"}]'), 'it sees a difference');
+Assert::same(['GET /api/users 418: the status is not documented, only 200, 422'], $checker->check('GET', '/api/users', 418, 'application/json', '{}'));
+Assert::same(['PATCH /api/users 200: /users has no PATCH'], $checker->check('PATCH', '/api/users', 200, 'application/json', '{}'));
+Assert::same([], $checker->check('GET', '/api/users/5/file', 200, 'application/pdf', '%PDF'), 'not JSON, so no schema to check');
+Assert::same([], $checker->check('GET', '/elsewhere', 200, 'application/json', '{}'), 'not of this API');

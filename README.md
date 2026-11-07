@@ -158,7 +158,7 @@ public function document(
 - **Only from there:** a query parameter or a JSON field of the same name never fills them.
 - **Content type:** a method with `#[FromForm]` and no `#[Consumes]` accepts both form types, and anything else gets `415`. It can't have `#[FromBody]` too.
 
-PHP reads forms of `POST` requests only.
+A form works with `POST`, `PUT` and `PATCH`. PHP reads one of `POST` itself, and the others are read by `request_parse_body()`, only for a method taking a form.
 
 A DTO can be the whole body or one of the parameters. See [DTOs](https://github.com/phloxcz/api-core#dtos).
 
@@ -318,21 +318,21 @@ A `Query` in a method with `#[FromBody]` comes from the URL, by the name of its 
 | calls `$this->terminate()` | nothing added |
 | writes the response itself with `readfile()` or `print` and returns nothing | what it wrote |
 
-Errors have the form `{"error": {"code": -32601, "message": "..."}}`, with `data` of an `ApiException` merged next to `code` and `message`.
+Errors have the form `{"error": {"code": 404, "message": "..."}}`, with `data` of an `ApiException` merged next to `code` and `message`. The `code` is the HTTP status, unless the application gave its own `errorCode`:
 
-| Situation | HTTP status | `code` |
-|---|---|---|
-| unknown path | `404` | `404` |
-| wrong verb, with an `Allow` header | `405` | `405` |
-| malformed JSON | `400` | `-32700` |
-| unsupported content type | `415` | `415` |
-| invalid parameters | `422` | `-32602` |
-| not logged in | `401` | `401` |
-| missing role | `403` | `403` |
-| unexpected exception (logged, details hidden) | `500` | `-32603` |
-| `ApiException` | its status | its `errorCode`, or the status |
+| Situation | HTTP status and `code` |
+|---|---|
+| unknown path | `404` |
+| wrong verb, with an `Allow` header | `405` |
+| malformed JSON | `400` |
+| unsupported content type | `415` |
+| invalid parameters, with what's wrong in `fields` | `422` |
+| not logged in | `401` |
+| missing role | `403` |
+| unexpected exception (logged, details hidden) | `500` |
+| `ApiException` | its status; `code` is its `errorCode`, or the status |
 
-Malformed JSON, invalid parameters and an unexpected exception keep the codes of JSON-RPC, which shares them, see [Errors](https://github.com/phloxcz/api-core#errors).
+Codes of JSON-RPC, which the transports share, never reach a client of REST. See [Errors](https://github.com/phloxcz/api-core#errors).
 
 The content type and JSON syntax are checked before authorization, so these two errors can reach an anonymous client. Parameters are validated after it.
 
@@ -385,6 +385,21 @@ The content of `#[Response]` is a class, a scalar, or an object such as `new Lis
 
 While the document is published, a route of your own at the same path fails when the container compiles. Change `path` if that happens.
 
+### Testing that responses match it
+
+`OpenApiChecker` checks a response against the document, so a test notices the documentation drifting from what the API returns:
+
+```php
+use Phlox\RestApi\Testing\OpenApiChecker;
+
+$checker = OpenApiChecker::of($container->getByType(OpenApi::class), 'api/v1', '/api/v1');
+
+$errors = $checker->check('GET', '/api/v1/users?page=2', $status, $contentType, $body);
+Assert::same([], $errors);
+```
+
+It reports a status the operation doesn't document, JSON where none is documented, and every value not matching the schema, with where it is, such as `GET /api/v1/users 200: $[0].id: "3" is not integer`. A response the document doesn't cover, such as of another API, is no error. Run every response of your HTTP tests through it.
+
 ## CORS
 
 Without `allowedOrigins`, no CORS headers are sent. An origin not on the list gets none either. `['*']` sends a literal `*`; combining it with `allowCredentials: true` fails when the container compiles, because browsers refuse it. A client sending an `Authorization` header needs no credentials here; for cookies, list the origins.
@@ -428,7 +443,7 @@ Changes that need checking in an existing project:
 - **A verb is required.** A method with no verb used to accept any verb. Now it's not an endpoint, and if it has `#[Route]`, the container doesn't compile.
 - **Inherited methods are no longer exposed.** A method from a shared base controller has to be overridden in the concrete controller.
 - **`ApiException` takes the HTTP status first:** `new ApiException(404, 'Not found.')`, with a code of your own as `errorCode:`. A code in place of the status, as in `new ApiException(1001, 'x')`, fails with the right call in the message. The same goes for `#[Throws]`.
-- **Errors of routing have their status as their code:** an unknown path `404`, a wrong verb `405` and an unsupported content type `415`, where they used to be `-32601` and `-32600`.
+- **The `code` of an error is the HTTP status,** unless the application gave its own: an unknown path `404`, a wrong verb `405`, malformed JSON `400`, an unsupported content type `415`, invalid parameters `422` and an unexpected exception `500`. They used to be codes of JSON-RPC, such as `-32601` and `-32602`. Check clients which read `code`.
 - **Status codes changed.** Errors that were `500` by default are now `400`, `404`, `405`, `415` or `422`, see above. A method with no value returns `204` instead of an empty `200`.
 - **Routes are stricter.** Paths and `regex` expressions are case-sensitive (start an expression with `(?i)` to change that), a controller's path must end at a segment boundary, and an unknown token such as `{id:imt}` fails instead of being ignored. A regular expression in literal text, such as `(users|people)/{id}`, fails too and has to move into a `regex` parameter.
 - **`#[Consumes]` is enforced,** where it used to serve only for documentation and JSON decoding. Without `#[FromBody]`, it no longer reads the body.

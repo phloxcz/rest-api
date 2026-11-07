@@ -155,7 +155,7 @@ Assert::notContains('secret', $result['output']);
 
 $result = $request('GET', '/rest/users/unencodable');
 Assert::same(500, $response->code);
-Assert::contains('"code":-32603', $result['output']);
+Assert::contains('"code":500', $result['output']);
 
 // --- A controller that sent the response itself
 

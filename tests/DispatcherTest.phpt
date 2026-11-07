@@ -72,7 +72,7 @@ Assert::same('GET, PUT, PATCH, DELETE', $wrong->headers['Allow']);
 
 Assert::same(3, $get('users', ['page' => '3'])->data['page'], 'from the query');
 Assert::same(422, $status($get('users', ['page' => 'x'])));
-Assert::same(ProtocolError::InvalidParams->value, $code($get('users', ['page' => 'x'])));
+Assert::same(422, $code($get('users', ['page' => 'x'])));
 
 $created = $post('users', '{"name":"Ann","age":30}');
 Assert::same(['name' => 'Ann', 'age' => 30, 'jsonData' => ['name' => 'Ann', 'age' => 30]], $created->data);
@@ -89,7 +89,7 @@ Assert::same('Ann', $post('users', '{"name":"Ann"}', 'application/vnd.api+json')
 Assert::same('Ann', $post('users', '{"name":"Ann"}', null)->data['name'], 'JSON is the default');
 
 Assert::same(422, $status($post('users', '{"age":1}')), 'missing required parameter');
-Assert::same(ProtocolError::InvalidParams->value, $code($post('users', 'name=Ann', 'application/x-www-form-urlencoded')), 'other bodies don\'t become parameters');
+Assert::same(422, $code($post('users', 'name=Ann', 'application/x-www-form-urlencoded')), 'other bodies don\'t become parameters');
 
 // A body isn't parsed where nothing would read it
 Assert::same(['action' => 'list', 'page' => 1], $dispatcher->handle('rest', 'GET', 'users', [], null, '{broken')->data);
@@ -98,9 +98,9 @@ Assert::same(['action' => 'list', 'page' => 1], $dispatcher->handle('rest', 'GET
 
 $broken = $post('users', '{"name":');
 Assert::same(400, $status($broken));
-Assert::same(ProtocolError::ParseError->value, $code($broken));
+Assert::same(400, $code($broken));
 
-Assert::same(ProtocolError::InvalidParams->value, $code($post('users', '5')), 'scalar body isn\'t spread into parameters');
+Assert::same(422, $code($post('users', '5')), 'scalar body isn\'t spread into parameters');
 
 // --- FromBody
 
@@ -109,9 +109,9 @@ Assert::same(['type' => 'stdClass', 'name' => 'x'], $post('files/json-object', '
 Assert::same(['type' => 'array', 'data' => ['a' => 1]], $post('files/json-array', '{"a":1}', 'application/json; charset=utf-8')->data, 'the old version failed on this');
 
 Assert::same(415, $status($post('files/json-array', 'a=1', 'text/plain')), 'FromBody means JSON unless said otherwise');
-Assert::same(ProtocolError::ParseError->value, $code($post('files/json-array', '{broken')));
-Assert::same(ProtocolError::InvalidParams->value, $code($post('files/json-array', null)), 'required body is missing');
-Assert::same(ProtocolError::InvalidParams->value, $code($post('files/json-array', '')));
+Assert::same(400, $code($post('files/json-array', '{broken')));
+Assert::same(422, $code($post('files/json-array', null)), 'required body is missing');
+Assert::same(422, $code($post('files/json-array', '')));
 
 Assert::same(['data' => null, 'mode' => 'default'], $post('files/optional', null)->data);
 Assert::same(
@@ -128,7 +128,7 @@ Assert::same(3, $post('files/upload', 'png', 'image/png')->data['bytes'], 'wildc
 Assert::same(415, $status($post('files/upload', 'x', 'video/mp4')));
 Assert::same(415, $status($post('files/upload', 'x', 'imagefake/png')));
 Assert::same(415, $status($post('files/upload', 'x', null)), 'a missing type counts as JSON, which isn\'t accepted here');
-Assert::same(ProtocolError::InvalidParams->value, $code($post('files/upload', null, 'video/mp4')), 'an empty body has no type to check');
+Assert::same(422, $code($post('files/upload', null, 'video/mp4')), 'an empty body has no type to check');
 
 Assert::same('xml accepted', $post('files/only-xml', '<a/>', 'application/xml')->data);
 Assert::same(415, $status($post('files/only-xml', '{}', 'application/json')));
@@ -145,7 +145,7 @@ Assert::same('name', $failure->data['error']['field']);
 
 $crash = $get('users/crash');
 Assert::same(500, $crash->status);
-Assert::same(ProtocolError::InternalError->value, $crash->data['error']['code']);
+Assert::same(500, $crash->data['error']['code'], 'a code of JSON-RPC means nothing in REST');
 Assert::same(ErrorCase::of(ProtocolError::InternalError)->message, $crash->data['error']['message'], 'no details leak');
 
 Assert::true($get('users/abort')->aborted);
@@ -169,7 +169,7 @@ $user = $container->getByType(User::class);
 
 $user->login(new SimpleIdentity(1, ['reader']));
 Assert::same('plain', $get('secure/plain')->data);
-Assert::same(ProtocolError::InvalidParams->value, $code($post('secure/typed', '{"required":"x"}')));
+Assert::same(422, $code($post('secure/typed', '{"required":"x"}')));
 Assert::same(403, $status($get('secure/any-role')));
 Assert::notContains('editor', $get('secure/any-role')->data['error']['message'], 'roles are internal');
 

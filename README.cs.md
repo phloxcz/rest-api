@@ -158,7 +158,7 @@ public function document(
 - **Jen odtud:** parametr z query ani pole JSON se stejným názvem je nikdy nenaplní.
 - **Typ obsahu:** metoda s `#[FromForm]` bez `#[Consumes]` přijímá oba typy formulářů a na cokoli jiného vrací `415`. Nemůže mít zároveň `#[FromBody]`.
 
-PHP čte formuláře jen u požadavků `POST`.
+Formulář funguje s `POST`, `PUT` i `PATCH`. U `POST` ho čte samo PHP, ostatní se čtou přes `request_parse_body()`, a to jen u metody, která formulář přijímá.
 
 DTO může být celé tělo nebo jeden z parametrů. Viz [DTO](https://github.com/phloxcz/api-core/blob/master/README.cs.md#dto).
 
@@ -318,21 +318,21 @@ public function batch(#[FromBody] ImportTypes $import): array
 | zavolá `$this->terminate()` | nic navíc |
 | zapíše odpověď sám přes `readfile()` nebo `print` a nic nevrátí | to, co zapsal |
 
-Chyby mají tvar `{"error": {"code": -32601, "message": "..."}}` a `data` z `ApiException` se sloučí vedle `code` a `message`.
+Chyby mají tvar `{"error": {"code": 404, "message": "..."}}` a `data` z `ApiException` se sloučí vedle `code` a `message`. `code` je HTTP stav, pokud aplikace nedala vlastní `errorCode`:
 
-| Situace | HTTP stav | `code` |
-|---|---|---|
-| neznámá cesta | `404` | `404` |
-| špatné sloveso, s hlavičkou `Allow` | `405` | `405` |
-| chybný JSON | `400` | `-32700` |
-| nepodporovaný typ obsahu | `415` | `415` |
-| neplatné parametry | `422` | `-32602` |
-| nepřihlášený | `401` | `401` |
-| chybějící role | `403` | `403` |
-| neočekávaná výjimka (zaloguje se, detaily se skryjí) | `500` | `-32603` |
-| `ApiException` | její stav | její `errorCode`, nebo stav |
+| Situace | HTTP stav a `code` |
+|---|---|
+| neznámá cesta | `404` |
+| špatné sloveso, s hlavičkou `Allow` | `405` |
+| chybný JSON | `400` |
+| nepodporovaný typ obsahu | `415` |
+| neplatné parametry, s tím, co je špatně, ve `fields` | `422` |
+| nepřihlášený | `401` |
+| chybějící role | `403` |
+| neočekávaná výjimka (zaloguje se, detaily se skryjí) | `500` |
+| `ApiException` | její stav; `code` je její `errorCode`, nebo stav |
 
-Chybný JSON, neplatné parametry a neočekávaná výjimka si nechávají kódy JSON-RPC, který je sdílí, viz [Chyby](https://github.com/phloxcz/api-core/blob/master/README.cs.md#chyby).
+Kódy JSON-RPC, které oba protokoly sdílejí, se ke klientovi REST nikdy nedostanou. Viz [Chyby](https://github.com/phloxcz/api-core/blob/master/README.cs.md#chyby).
 
 Typ obsahu a syntaxe JSON se kontrolují před autorizací, takže tyhle dvě chyby může dostat i nepřihlášený klient. Parametry se kontrolují až po ní.
 
@@ -385,6 +385,21 @@ Obsahem `#[Response]` je třída, skalár, nebo objekt jako `new ListOf(...)`, `
 
 Dokud je dokument zveřejněný, vlastní routa na stejné cestě selže při kompilaci kontejneru. V takovém případě změňte `path`.
 
+### Test, že odpovědi odpovídají dokumentu
+
+`OpenApiChecker` porovná odpověď s dokumentem, takže test pozná, když se dokumentace rozejde s tím, co API vrací:
+
+```php
+use Phlox\RestApi\Testing\OpenApiChecker;
+
+$checker = OpenApiChecker::of($container->getByType(OpenApi::class), 'api/v1', '/api/v1');
+
+$errors = $checker->check('GET', '/api/v1/users?page=2', $status, $contentType, $body);
+Assert::same([], $errors);
+```
+
+Nahlásí stav, který operace nedokumentuje, JSON tam, kde žádný dokumentovaný není, a každou hodnotu, která neodpovídá schématu, i s tím, kde je, třeba `GET /api/v1/users 200: $[0].id: "3" is not integer`. Odpověď, kterou dokument nepokrývá, třeba jiného API, chybou není. Pusťte přes ni každou odpověď svých HTTP testů.
+
 ## CORS
 
 Bez `allowedOrigins` se žádné CORS hlavičky neposílají. Origin mimo seznam je také nedostane. `['*']` pošle doslova `*`; kombinace s `allowCredentials: true` selže při kompilaci kontejneru, protože ji prohlížeče odmítají. Klient, který posílá hlavičku `Authorization`, tu credentials nepotřebuje. Pro cookies vyjmenujte originy.
@@ -428,7 +443,7 @@ Změny, které je potřeba v existujícím projektu zkontrolovat:
 - **Sloveso je povinné.** Metoda bez slovesa dřív přijímala jakékoli. Teď není endpoint, a pokud má `#[Route]`, kontejner se nezkompiluje.
 - **Zděděné metody už nejsou vystavené.** Metodu ze společného základního kontroleru je potřeba přepsat v konkrétním kontroleru.
 - **`ApiException` bere jako první HTTP stav:** `new ApiException(404, 'Not found.')`, s vlastním kódem v `errorCode:`. Kód na místě stavu, jako v `new ApiException(1001, 'x')`, skončí chybou se správným zápisem ve zprávě. Totéž platí pro `#[Throws]`.
-- **Chyby routování mají jako kód svůj stav:** neznámá cesta `404`, špatné sloveso `405` a nepodporovaný typ obsahu `415`, dřív to bylo `-32601` a `-32600`.
+- **`code` chyby je HTTP stav,** pokud aplikace nedala vlastní: neznámá cesta `404`, špatné sloveso `405`, chybný JSON `400`, nepodporovaný typ obsahu `415`, neplatné parametry `422` a neočekávaná výjimka `500`. Dřív to byly kódy JSON-RPC, třeba `-32601` a `-32602`. Zkontrolujte klienty, kteří `code` čtou.
 - **Změnily se stavové kódy.** Chyby, které byly ve výchozím stavu `500`, jsou teď `400`, `404`, `405`, `415` nebo `422`, viz výše. Metoda bez hodnoty vrací `204` místo prázdného `200`.
 - **Routy jsou přísnější.** Cesty a výrazy `regex` rozlišují velikost písmen (změníte to tím, že výraz začnete `(?i)`), cesta kontroleru musí končit na hranici segmentu a neznámý token jako `{id:imt}` selže, místo aby se ignoroval. Regulární výraz v doslovném textu, jako `(users|people)/{id}`, také selže a musí se přesunout do parametru `regex`.
 - **`#[Consumes]` se vynucuje,** dřív sloužil jen pro dokumentaci a dekódování JSON. Bez `#[FromBody]` už tělo nenačítá.

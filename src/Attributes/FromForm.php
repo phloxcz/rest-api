@@ -20,7 +20,8 @@ use Attribute;
  *
  *     public function upload(#[FromForm] FileUpload $file, #[FromForm] string $title): array
  *
- * PHP reads forms of POST requests only.
+ * PHP reads forms of POST requests, and the server reads those of PUT and PATCH
+ * by request_parse_body().
  */
 #[Attribute(Attribute::TARGET_PARAMETER)]
 final class FromForm

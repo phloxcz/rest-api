@@ -57,7 +57,8 @@ final class Dispatcher
      * @param string|(\Closure(): ?string)|null $body A closure is called only when the body is needed,
      *        so a controller can stream a large upload from php://input itself
      * @param array<string, string> $headers Of the request, for #[FromHeader]
-     * @param array<string, mixed> $form Fields and files of a submitted form, for #[FromForm]
+     * @param array<string, mixed>|(\Closure(): array<string, mixed>) $form Fields and files of a submitted form,
+     *        for #[FromForm]; a closure is called only for a method taking one, as reading it may read the body
      */
     public function handle(
         string $endpoint,
@@ -67,7 +68,7 @@ final class Dispatcher
         ?string $contentType = null,
         string|\Closure|null $body = null,
         array $headers = [],
-        array $form = [],
+        array|\Closure $form = [],
     ): Result {
         $config = $this->endpoints[$endpoint]
             ?? throw new \InvalidArgumentException("Unknown endpoint '{$endpoint}'.");
@@ -144,6 +145,9 @@ final class Dispatcher
                 }
             }
 
+            if ($route['fromForm'] !== [] && $form instanceof \Closure) {
+                $form = $form();
+            }
             foreach ($route['fromForm'] as $name => $field) {
                 unset($parameters[$name], $parameters[$field['position']]);
                 $value = self::withoutEmptyFiles($form[$field['name']] ?? null);
@@ -195,9 +199,20 @@ final class Dispatcher
         }
 
         return new Result(
-            ['error' => [...$e->getData(), 'code' => $e->getCode(), 'message' => $message]],
+            ['error' => [...$e->getData(), 'code' => self::codeOf($e), 'message' => $message]],
             $e->getHttpCode(),
         );
+    }
+
+    /**
+     * The code of an application, or the HTTP status. Codes of JSON-RPC, which the
+     * transports share, mean nothing to a client of REST.
+     */
+    public static function codeOf(ApiException $e): int
+    {
+        $code = $e->getErrorCode();
+
+        return $code === null || ProtocolError::tryFrom($code) !== null ? $e->getHttpCode() : $code;
     }
 
     /**

@@ -15,6 +15,7 @@ namespace Phlox\RestApi;
 use Phlox\ApiCore\ProtocolError;
 use Phlox\ApiCore\Attributes\ErrorCase;
 use Nette\Application\Response as ApplicationResponse;
+use Nette\Http\FileUpload;
 use Nette\Http\IRequest;
 use Nette\Http\IResponse;
 use Nette\Utils\Json;
@@ -68,7 +69,7 @@ final class Server
             $this->request->getHeader('content-type'),
             $this->request->getRawBody(...),
             $this->request->getHeaders(),
-            array_replace_recursive($this->request->getPost(), $this->request->getFiles()),
+            fn(): array => $this->readForm($verb),
         );
 
         if (!$result->aborted) {
@@ -148,6 +149,69 @@ final class Server
     }
 
     /**
+     * Fields and files of a form. PHP reads them for POST alone, and the rest of
+     * the verbs get them by request_parse_body(), which reads the body; that's why
+     * this is called only when a method takes a form.
+     *
+     * @return array<string, mixed>
+     */
+    private function readForm(string $verb): array
+    {
+        if ($verb === 'POST') {
+            return array_replace_recursive($this->request->getPost(), $this->request->getFiles());
+        }
+
+        $type = strtolower(trim(explode(';', (string) $this->request->getHeader('content-type'))[0]));
+        if ($type !== 'multipart/form-data' && $type !== 'application/x-www-form-urlencoded') {
+            return [];
+        }
+
+        try {
+            [$fields, $files] = request_parse_body();
+        } catch (\RequestParseBodyException $e) {
+            throw new ApiException(400, 'The form can not be read.', internal: $e->getMessage(), previous: $e);
+        }
+
+        return array_replace_recursive($fields, self::toUploads($files));
+    }
+
+    /**
+     * Files as PHP lists them, `name[]` included, as FileUpload objects in the shape of the form.
+     *
+     * @param array<string, mixed> $files
+     * @return array<string, mixed>
+     */
+    private static function toUploads(array $files): array
+    {
+        $result = [];
+        foreach ($files as $field => $file) {
+            $result[$field] = is_array($file['name'] ?? null) ? self::regroup($file) : new FileUpload($file);
+        }
+
+        return $result;
+    }
+
+    /**
+     * `['name' => ['a', 'b'], 'size' => [1, 2]]` to a list of uploads, at any depth.
+     *
+     * @param array<string, mixed> $file
+     * @return array<int|string, mixed>
+     */
+    private static function regroup(array $file): array
+    {
+        $result = [];
+        foreach (array_keys($file['name']) as $key) {
+            $item = [];
+            foreach ($file as $attribute => $values) {
+                $item[$attribute] = $values[$key];
+            }
+            $result[$key] = is_array($item['name']) ? self::regroup($item) : new FileUpload($item);
+        }
+
+        return $result;
+    }
+
+    /**
      * Sets the status too, because a value that can't be encoded means a failure.
      */
     private function encode(Result $result): string
@@ -160,7 +224,7 @@ final class Server
             $this->response->setCode(IResponse::S500_InternalServerError);
 
             return Json::encode([
-                'error' => ['code' => ProtocolError::InternalError->value, 'message' => ErrorCase::of(ProtocolError::InternalError)->message],
+                'error' => ['code' => IResponse::S500_InternalServerError, 'message' => ErrorCase::of(ProtocolError::InternalError)->message],
             ]);
         }
 
