@@ -13,22 +13,28 @@ declare(strict_types=1);
 namespace Phlox\RestApi\Attributes;
 
 use Attribute;
+use Phlox\ApiCore\Schema\SchemaDefinition;
 
 /**
- * Documents a response that can't be read from the signature, such as `201`, or
- * a file sent by a Nette\Application\Response. A successful response declared
- * here replaces the one read from the return type.
+ * Documents a response the native return type can't tell:
+ *
+ *     #[Response(200, new Shape(['value' => new Paged(User::class)]))]
+ *     #[Response(201)]                                // the return type, with another code
+ *     #[Response(200, new Binary, contentType: 'application/pdf')]
+ *     #[Response(404, description: 'No such user')]   // the schema of errors
+ *
+ * A successful response declared here replaces the one read from the method.
  */
 #[Attribute(Attribute::TARGET_METHOD | Attribute::IS_REPEATABLE)]
 final class Response
 {
     /**
-     * @param string|array<int|string, mixed>|null $content A type such as `list<UserDto>`, JSON Schema or `@binary`;
-     *        without it, a successful response takes the return type (see ContentDefinition)
+     * @param SchemaDefinition|string|null $content An object from Phlox\ApiCore\Schema, a class as `User::class`, or a scalar
+     *        as `'int'`; without it, a success takes the return type or #[QueryOf], and an error from 400 the schema of errors
      */
     public function __construct(
         public readonly int $code,
-        public readonly string|array|null $content = null,
+        public readonly SchemaDefinition|string|null $content = null,
         public readonly ?string $contentType = null,
         public readonly ?string $description = null,
     ) {

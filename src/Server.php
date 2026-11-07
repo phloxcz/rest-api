@@ -12,6 +12,8 @@ declare(strict_types=1);
 
 namespace Phlox\RestApi;
 
+use Phlox\ApiCore\ProtocolError;
+use Phlox\ApiCore\Attributes\ErrorCase;
 use Nette\Application\Response as ApplicationResponse;
 use Nette\Http\IRequest;
 use Nette\Http\IResponse;
@@ -65,6 +67,8 @@ final class Server
             $this->request->getQuery(),
             $this->request->getHeader('content-type'),
             $this->request->getRawBody(...),
+            $this->request->getHeaders(),
+            array_replace_recursive($this->request->getPost(), $this->request->getFiles()),
         );
 
         if (!$result->aborted) {
@@ -156,7 +160,7 @@ final class Server
             $this->response->setCode(IResponse::S500_InternalServerError);
 
             return Json::encode([
-                'error' => ['code' => ApiException::E_INTERNAL_ERROR, 'message' => ApiException::E_INTERNAL_ERROR_TEXT],
+                'error' => ['code' => ProtocolError::InternalError->value, 'message' => ErrorCase::of(ProtocolError::InternalError)->message],
             ]);
         }
 

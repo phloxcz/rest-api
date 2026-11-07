@@ -122,6 +122,44 @@ public function upload(int $id, #[FromBody] string $content): void { /* ... */ }
 
 `#[Consumes]` lists accepted content types. A body of another type gets `415`. A method with `#[FromBody]` and no `#[Consumes]` accepts `application/json`; a method with neither accepts anything.
 
+Without `#[FromBody]`, `#[Consumes]` checks only the type, and the body stays unread for the method to stream. The documentation then describes the body as a file:
+
+```php
+#[HttpPost]
+#[Route('{id:int}/attachment')]
+#[Consumes('application/octet-stream')]
+public function attach(int $id): array
+{
+    $bytes = stream_copy_to_stream(fopen('php://input', 'rb'), fopen($this->storage->path($id), 'wb'));
+    // ...
+}
+```
+
+### Headers and forms
+
+`#[FromHeader]` fills a parameter with a header, and `#[FromForm]` with a field of a submitted form, `multipart/form-data` or `application/x-www-form-urlencoded`. A file comes as `Nette\Http\FileUpload`:
+
+```php
+/** @param list<FileUpload> $attachments */
+#[HttpPost]
+#[Route('{id:int}/document')]
+public function document(
+    int $id,
+    #[FromForm] FileUpload $file,
+    #[FromForm] ?string $note = null,
+    #[FromForm('attachment')] array $attachments = [],
+    #[FromHeader('X-Request-Id')] ?string $requestId = null,
+): array { /* ... */ }
+```
+
+- **Names:** the parameter's own, or the one given. A header without one is made from the parameter, so `$ifMatch` reads `If-Match`, in any case.
+- **Values** are converted as query parameters are. One missing is as if not sent: the default, null, or `422` with `is required.`
+- **Files:** an empty file input is as if not sent. A file too large gets `422` with `is too large.`, a broken upload `could not be uploaded.`
+- **Only from there:** a query parameter or a JSON field of the same name never fills them.
+- **Content type:** a method with `#[FromForm]` and no `#[Consumes]` accepts both form types, and anything else gets `415`. It can't have `#[FromBody]` too.
+
+PHP reads forms of `POST` requests only.
+
 A DTO can be the whole body or one of the parameters. See [DTOs](https://github.com/phloxcz/api-core#dtos).
 
 ```php
@@ -167,7 +205,7 @@ public function create(#[FromBody] SaveType $type, #[QueryOf(TypeResource::class
             'name' => $type->name,
         ]);
     } catch (UniqueConstraintViolationException) {
-        throw new ApiException(409, "Type '{$type->ident}' already exists.", httpCode: 409);
+        throw new ApiException(409, "Type '{$type->ident}' already exists.");
     }
 
     $this->response->setCode(201);
@@ -207,7 +245,7 @@ public function replace(int $id, #[FromBody] SaveType $type, #[QueryOf(TypeResou
 private function findType(int $id): Type
 {
     return $this->db->table('type')->get($id)
-        ?? throw new ApiException(404, 'Type not found.', httpCode: 404);
+        ?? throw new ApiException(404, 'Type not found.');
 }
 ```
 
@@ -236,10 +274,9 @@ public function change(int $id, #[FromBody, PatchOf(SaveType::class)] Patch $cha
 A DTO holds a list by a docblock, see [Collections](https://github.com/phloxcz/api-core#collections). To save all of it or none of it, use a transaction:
 
 ```php
-/** @return array{ids: list<int>} */
 #[HttpPost]
 #[Route('batch')]
-#[Response(201)]
+#[Response(201, new Shape(['ids' => new ListOf('int')]))]
 public function batch(#[FromBody] ImportTypes $import): array
 {
     $ids = $this->db->transaction(static function (Explorer $db) use ($import): array {
@@ -285,15 +322,17 @@ Errors have the form `{"error": {"code": -32601, "message": "..."}}`, with `data
 
 | Situation | HTTP status | `code` |
 |---|---|---|
-| unknown path | `404` | `-32601` |
-| wrong verb, with an `Allow` header | `405` | `-32601` |
+| unknown path | `404` | `404` |
+| wrong verb, with an `Allow` header | `405` | `405` |
 | malformed JSON | `400` | `-32700` |
-| unsupported content type | `415` | `-32600` |
+| unsupported content type | `415` | `415` |
 | invalid parameters | `422` | `-32602` |
 | not logged in | `401` | `401` |
 | missing role | `403` | `403` |
 | unexpected exception (logged, details hidden) | `500` | `-32603` |
-| `ApiException` | its `httpCode`, by default `500` for your own codes | its code |
+| `ApiException` | its status | its `errorCode`, or the status |
+
+Malformed JSON, invalid parameters and an unexpected exception keep the codes of JSON-RPC, which shares them, see [Errors](https://github.com/phloxcz/api-core#errors).
 
 The content type and JSON syntax are checked before authorization, so these two errors can reach an anonymous client. Parameters are validated after it.
 
@@ -319,24 +358,30 @@ On top of that, REST documents these on its own:
 - **Paths:** a route with an optional parameter becomes a path for every combination, because OpenAPI has no optional path parameters.
 - **Path parameters:** types and constraints of a route, so `{id:int:min(1)}` is an integer with `minimum: 1` and `{id:guid}` has `format: uuid`.
 - **Other parameters:** in the query, except for `POST`, `PUT` and `PATCH` without `#[FromBody]`, where they're properties of a JSON body.
-- **Responses:** the return type, `204` for nothing, and for `?Foo` both.
+- **Responses:** the native return type or `#[QueryOf]`, `204` for nothing, and for `?Foo` both.
 - **Errors:** `400`, `401`, `403`, `404`, `415` and `422` wherever they can happen.
 - **Security:** with `securitySchemes`, a method requiring login lists all schemes as alternatives, and a public one has `security: []`. Roles stay in `x-roles` and the description, because a security requirement can't say "admin or editor".
 
-`#[Response]` adds what can't be read from the signature, and a successful response declared there replaces the one read from the return type:
+`#[Response]` adds what the method can't tell, and a successful response declared there replaces the one read from the method:
 
 ```php
+use Phlox\ApiCore\Schema\{Binary, Paged, Shape};
+
+#[HttpGet]
+#[Response(200, new Shape(['value' => new Paged(User::class)]))]
+public function list(?Query $query = null): array { /* ... */ }
+
 #[HttpPost]
 #[Response(201)]                                     // the return type, with a different code
 public function create(#[FromBody] CreateUser $input): UserOutput { /* ... */ }
 
 #[HttpGet]
-#[Response(200, '@binary', 'application/pdf', 'The invoice')]
-#[Response(404, '@error', description: 'No such invoice')]
+#[Response(200, new Binary, 'application/pdf', 'The invoice')]
+#[Response(404, description: 'No such invoice')]     // a code from 400 gets the schema of errors
 public function download(int $id): FileResponse { /* ... */ }
 ```
 
-The content of `#[Response]` is a type as in a docblock (`list<UserOutput>`), JSON Schema, `@binary` or `@error`.
+The content of `#[Response]` is a class, a scalar, or an object such as `new ListOf(...)`, `new Shape([...])` or `new Paged(...)`, see [Describing a response](https://github.com/phloxcz/api-core#describing-a-response). A docblock `@return` isn't read.
 
 While the document is published, a route of your own at the same path fails when the container compiles. Change `path` if that happens.
 
@@ -382,15 +427,16 @@ Changes that need checking in an existing project:
 - **`#[Authorize(['a', 'b'])]` now means a or b, so it lets in more users than before.** Where both roles are needed, write `#[Authorize(['a', 'b'], all: true)]`. Attributes on a class and a method still have to hold together.
 - **A verb is required.** A method with no verb used to accept any verb. Now it's not an endpoint, and if it has `#[Route]`, the container doesn't compile.
 - **Inherited methods are no longer exposed.** A method from a shared base controller has to be overridden in the concrete controller.
-- **`ApiException` has a different order of arguments.** The fourth positional argument was `$httpCode`, now it's `$previous`. Use the named `httpCode:`.
+- **`ApiException` takes the HTTP status first:** `new ApiException(404, 'Not found.')`, with a code of your own as `errorCode:`. A code in place of the status, as in `new ApiException(1001, 'x')`, fails with the right call in the message. The same goes for `#[Throws]`.
+- **Errors of routing have their status as their code:** an unknown path `404`, a wrong verb `405` and an unsupported content type `415`, where they used to be `-32601` and `-32600`.
 - **Status codes changed.** Errors that were `500` by default are now `400`, `404`, `405`, `415` or `422`, see above. A method with no value returns `204` instead of an empty `200`.
 - **Routes are stricter.** Paths and `regex` expressions are case-sensitive (start an expression with `(?i)` to change that), a controller's path must end at a segment boundary, and an unknown token such as `{id:imt}` fails instead of being ignored. A regular expression in literal text, such as `(users|people)/{id}`, fails too and has to move into a `regex` parameter.
-- **`#[Consumes]` is enforced,** where it used to serve only for documentation and JSON decoding.
+- **`#[Consumes]` is enforced,** where it used to serve only for documentation and JSON decoding. Without `#[FromBody]`, it no longer reads the body.
 - **Path parameters are URL-decoded.**
 - **CORS:** `allowedOrigins: ['*']` with `allowCredentials: true` must become a list of origins.
 - **The bootstrap runs before the API.** Code after `createContainer()` now also runs for API requests, including anything like a redirect or a maintenance mode. `index.php` has to call `Application::run()`.
 - **Dates and times:** a time zone alone, such as `x` or `utc`, is now refused instead of meaning the current time.
-- **Documentation:** the `openapi` config with `content` and `outputPath` is gone. Move `info` and `securitySchemes` to `documentation`, anything else to `documentation.extra`, and write files with `OpenApi::toYaml()` if you need them. `#[Response]` moves to `Phlox\RestApi\Attributes\Response`. `#[Parameter]` moves to `Phlox\ApiCore\Attributes\Parameter` and is deprecated, because a docblock or `#[Schema]` says the same. The array notation such as `['object', ['id' => 'int']]` keeps working in both, but is deprecated as well in favour of DTOs and docblock types.
+- **Documentation:** the `openapi` config with `content` and `outputPath` is gone. Move `info` and `securitySchemes` to `documentation`, anything else to `documentation.extra`, and write files with `OpenApi::toYaml()` if you need them. `#[Response]` moves to `Phlox\RestApi\Attributes\Response`, and its content is an object such as `new Shape([...])` or `new Paged(Foo::class)` instead of the array notation, `@pager`, `@binary` and `@error`. `#[Parameter]` is gone, because the type of the parameter, a docblock or `#[Schema]` says the same. What's gone fails when the container compiles, saying what to write, see [Documentation](https://github.com/phloxcz/api-core/blob/master/MIGRATION.md#7-documentation) in the migration guide.
 - **The query language** moved to [`phloxcz/api-query`](https://github.com/phloxcz/api-query#migrating-from-abrad450api-server-nette), including `$this->processor`.
 
 ## License

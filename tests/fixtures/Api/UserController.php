@@ -91,7 +91,7 @@ class UserController extends ApiController
     #[Route('fail')]
     public function fail(): void
     {
-        throw new ApiException(1234, 'Public failure', 'secret detail', data: ['field' => 'name', 'code' => 'overwritten'], httpCode: 409);
+        throw new ApiException(409, 'Public failure', errorCode: 1234, internal: 'secret detail', data: ['field' => 'name', 'code' => 'overwritten']);
     }
 
     #[HttpGet]

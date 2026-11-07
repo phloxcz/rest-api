@@ -140,7 +140,7 @@ Assert::same('', $result['output'], 'HEAD has no body');
 $result = $request('GET', '/rest/nothing');
 Assert::same(404, $response->code);
 Assert::same('application/json; charset=utf-8', $response->getHeader('content-type'));
-Assert::contains('"code":-32601', $result['output']);
+Assert::contains('{"error":{"code":404,"message":"Not found."}}', $result['output']);
 
 $result = $request('PATCH', '/rest/users/me');
 Assert::same(405, $response->code);

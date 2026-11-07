@@ -26,6 +26,8 @@ use Phlox\ApiCore\Security\Authorizer;
 use Phlox\ApiCore\Types\DtoMeta;
 use Phlox\RestApi\Attributes\Consumes;
 use Phlox\RestApi\Attributes\FromBody;
+use Phlox\RestApi\Attributes\FromForm;
+use Phlox\RestApi\Attributes\FromHeader;
 use Phlox\RestApi\Attributes\HttpVerb;
 use Phlox\RestApi\Attributes\Route;
 use Phlox\RestApi\Dispatcher;
@@ -225,13 +227,20 @@ final class Extension extends Nette\DI\CompilerExtension
 
                 [$path, $params] = self::buildPath($class, $method);
                 $fromBody = self::findFromBody($method, $description);
+                $fromHeader = self::findNamed($method, FromHeader::class, $description);
+                $fromForm = self::findNamed($method, FromForm::class, $description);
+                if ($fromBody !== null && $fromForm !== []) {
+                    throw new Nette\InvalidStateException("{$description}: a body is either #[FromBody] or #[FromForm], not both.");
+                }
                 $handler = ControllerScanner::createHandler($service, $class, $method, $endpoint->authorize);
-                $consumes = self::buildConsumes($method, $fromBody);
+                $consumes = self::buildConsumes($method, $fromBody, $fromForm !== []);
 
                 $table->add($verbs, $path, $params, [
                     'handler' => $handler->toArray(),
                     'consumes' => $consumes,
                     'fromBody' => $fromBody,
+                    'fromHeader' => $fromHeader,
+                    'fromForm' => $fromForm,
                 ], $description);
 
                 $routes[] = [
@@ -244,6 +253,8 @@ final class Extension extends Nette\DI\CompilerExtension
                     'roles' => $handler->roles,
                     'consumes' => $consumes,
                     'fromBody' => $fromBody,
+                    'fromHeader' => $fromHeader,
+                    'fromForm' => $fromForm,
                 ];
             }
         }
@@ -319,6 +330,45 @@ final class Extension extends Nette\DI\CompilerExtension
     }
 
     /**
+     * Parameters filled from a header or a form field, by the attribute's name or their own.
+     *
+     * @param class-string<FromHeader|FromForm> $attribute
+     * @return array<string, array{name: string, position: int}> Parameter => header or field
+     */
+    private static function findNamed(ReflectionMethod $method, string $attribute, string $description): array
+    {
+        $found = [];
+
+        foreach ($method->getParameters() as $parameter) {
+            $attributes = $parameter->getAttributes($attribute);
+            if ($attributes === []) {
+                continue;
+            }
+
+            $short = substr($attribute, strrpos($attribute, '\\') + 1);
+            foreach ([FromBody::class, FromHeader::class, FromForm::class] as $other) {
+                if ($other !== $attribute && $parameter->getAttributes($other) !== []) {
+                    $otherShort = substr($other, strrpos($other, '\\') + 1);
+                    throw new Nette\InvalidStateException("{$description}: \${$parameter->getName()} has both #[{$short}] and #[{$otherShort}].");
+                }
+            }
+
+            $name = $attributes[0]->newInstance()->name;
+            if ($name === null) {
+                $name = $parameter->getName();
+                if ($attribute === FromHeader::class) {
+                    // $ifMatch is If-Match
+                    $name = implode('-', array_map(ucfirst(...), explode('-', self::toKebabCase($name))));
+                }
+            }
+
+            $found[$parameter->getName()] = ['name' => $name, 'position' => $parameter->getPosition()];
+        }
+
+        return $found;
+    }
+
+    /**
      * Whether a JSON body should be decoded into an array rather than an object.
      */
     private static function acceptsArray(?\ReflectionType $type): bool
@@ -341,13 +391,18 @@ final class Extension extends Nette\DI\CompilerExtension
      * @param array{name: string, position: int, assoc: bool}|null $fromBody
      * @return list<string>
      */
-    private static function buildConsumes(ReflectionMethod $method, ?array $fromBody): array
+    private static function buildConsumes(ReflectionMethod $method, ?array $fromBody, bool $fromForm): array
     {
         $consumes = array_map(
             static fn(ReflectionAttribute $attribute): string => $attribute->newInstance()->contentType,
             $method->getAttributes(Consumes::class),
         );
 
-        return $consumes === [] && $fromBody !== null ? ['application/json'] : $consumes;
+        return match (true) {
+            $consumes !== [] => $consumes,
+            $fromForm => ['multipart/form-data', 'application/x-www-form-urlencoded'],
+            $fromBody !== null => ['application/json'],
+            default => [],
+        };
     }
 }

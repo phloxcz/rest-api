@@ -7,6 +7,7 @@
 
 declare(strict_types=1);
 
+use Phlox\ApiCore\ProtocolError;
 use Nette\InvalidStateException;
 use Phlox\RestApi\Dispatcher;
 use Tester\Assert;
@@ -45,6 +46,18 @@ $e = Assert::exception(
     InvalidStateException::class,
 );
 Assert::contains('only one parameter', $e->getMessage());
+
+$e = Assert::exception(
+    static fn() => createContainer($invalid('BodyAndForm', 'AController')),
+    InvalidStateException::class,
+);
+Assert::contains('AController::both(): a body is either #[FromBody] or #[FromForm], not both.', $e->getMessage());
+
+$e = Assert::exception(
+    static fn() => createContainer($invalid('HeaderAndForm', 'AController')),
+    InvalidStateException::class,
+);
+Assert::contains('AController::both(): $a has both #[FromHeader] and #[FromForm].', $e->getMessage());
 
 $e = Assert::exception(
     static fn() => createContainer($invalid('BadToken', 'AController')),
@@ -147,7 +160,7 @@ Assert::same(
     )['result'],
 );
 Assert::same(
-    Phlox\ApiCore\ApiException::E_METHOD_NOT_FOUND,
+    Phlox\ApiCore\ProtocolError::MethodNotFound->value,
     $container->getByType(Phlox\RpcApi\Dispatcher::class)->handle(
         'api',
         '{"jsonrpc":"2.0","method":"user.me","id":1}',

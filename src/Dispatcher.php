@@ -12,6 +12,8 @@ declare(strict_types=1);
 
 namespace Phlox\RestApi;
 
+use Phlox\ApiCore\ProtocolError;
+use Nette\Http\FileUpload;
 use Phlox\ApiCore\AbortException;
 use Phlox\ApiCore\ApiException;
 use Phlox\ApiCore\ControllerInvoker;
@@ -54,6 +56,8 @@ final class Dispatcher
      * @param array<int|string, mixed> $query
      * @param string|(\Closure(): ?string)|null $body A closure is called only when the body is needed,
      *        so a controller can stream a large upload from php://input itself
+     * @param array<string, string> $headers Of the request, for #[FromHeader]
+     * @param array<string, mixed> $form Fields and files of a submitted form, for #[FromForm]
      */
     public function handle(
         string $endpoint,
@@ -62,6 +66,8 @@ final class Dispatcher
         array $query = [],
         ?string $contentType = null,
         string|\Closure|null $body = null,
+        array $headers = [],
+        array $form = [],
     ): Result {
         $config = $this->endpoints[$endpoint]
             ?? throw new \InvalidArgumentException("Unknown endpoint '{$endpoint}'.");
@@ -85,22 +91,22 @@ final class Dispatcher
             $typeGiven = trim((string) $contentType) !== '';
             $bodyVerb = in_array($verb, self::BodyParameterVerbs, true);
 
-            // Anything else, such as a binary upload, stays unread for the controller to stream
-            if ($route['consumes'] !== [] || $route['fromBody'] !== null || ($bodyVerb && self::isJson($type))) {
+            // Anything else, such as a binary upload, stays unread for the controller to stream,
+            // even with #[Consumes], which then checks only the type
+            $unread = false;
+            $takesJson = $route['consumes'] === [] || array_any($route['consumes'], self::isJson(...));
+            if ($route['fromBody'] !== null || ($bodyVerb && $takesJson && self::isJson($type))) {
                 $body = $body instanceof \Closure ? $body() : $body;
             } elseif ($body instanceof \Closure) {
                 $body = null;
+                $unread = true;
             }
 
             $hasBody = $body !== null && $body !== '';
 
-            if ($hasBody && $route['consumes'] !== [] && !self::isAccepted($type, $route['consumes'])) {
-                throw new ApiException(
-                    ApiException::E_INVALID_REQUEST,
-                    'Unsupported media type.',
-                    internal: 'Accepted: ' . implode(', ', $route['consumes']) . '.',
-                    httpCode: 415,
-                );
+            // An unread body is known by its type
+            if (($hasBody || ($unread && $typeGiven)) && $route['consumes'] !== [] && !self::isAccepted($type, $route['consumes'])) {
+                throw new ApiException(415, internal: 'Accepted: ' . implode(', ', $route['consumes']) . '.');
             }
 
             $isJson = $hasBody && self::isJson($type);
@@ -128,6 +134,24 @@ final class Dispatcher
                 }
             }
 
+            // Headers and form fields fill only their parameters, and never one of the same name from elsewhere
+            $headers = array_change_key_case($headers);
+            foreach ($route['fromHeader'] as $name => $header) {
+                unset($parameters[$name], $parameters[$header['position']]);
+                $value = $headers[strtolower($header['name'])] ?? null;
+                if ($value !== null) {
+                    $prebound[$name] = $value;
+                }
+            }
+
+            foreach ($route['fromForm'] as $name => $field) {
+                unset($parameters[$name], $parameters[$field['position']]);
+                $value = self::withoutEmptyFiles($form[$field['name']] ?? null);
+                if ($value !== null) {
+                    $prebound[$name] = $value;
+                }
+            }
+
             return new Result($this->invoker->invoke(
                 Handler::fromArray($route['handler']),
                 $parameters,
@@ -140,7 +164,7 @@ final class Dispatcher
             return $this->buildError($e);
         } catch (\Throwable $e) {
             $this->errorReporter->report($e);
-            return $this->buildError(new ApiException(ApiException::E_INTERNAL_ERROR, internal: $e->getMessage()));
+            return $this->buildError(new ApiException(ProtocolError::InternalError, internal: $e->getMessage()));
         }
     }
 
@@ -155,14 +179,10 @@ final class Dispatcher
         }
 
         if ($allowedVerbs === []) {
-            throw new ApiException(ApiException::E_METHOD_NOT_FOUND, internal: "No route for '{$path}'.");
+            throw new ApiException(404, internal: "No route for '{$path}'.");
         }
 
-        $error = $this->buildError(new ApiException(
-            ApiException::E_METHOD_NOT_FOUND,
-            'Method not allowed.',
-            httpCode: 405,
-        ));
+        $error = $this->buildError(new ApiException(405));
 
         return new Result($error->data, $error->status, ['Allow' => implode(', ', $allowedVerbs)]);
     }
@@ -181,6 +201,23 @@ final class Dispatcher
     }
 
     /**
+     * A file input left empty is as if it wasn't there, so a parameter can be optional.
+     */
+    private static function withoutEmptyFiles(mixed $value): mixed
+    {
+        if ($value instanceof FileUpload) {
+            return $value->getError() === UPLOAD_ERR_NO_FILE ? null : $value;
+        }
+
+        if (is_array($value)) {
+            $kept = array_filter(array_map(self::withoutEmptyFiles(...), $value), static fn(mixed $item): bool => $item !== null);
+            return array_is_list($value) ? array_values($kept) : $kept;
+        }
+
+        return $value;
+    }
+
+    /**
      * @throws ApiException
      */
     private static function decodeJson(string $body, bool $assoc = true): mixed
@@ -188,7 +225,7 @@ final class Dispatcher
         try {
             return json_decode($body, $assoc, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException $e) {
-            throw new ApiException(ApiException::E_PARSE_ERROR, internal: $e->getMessage(), previous: $e);
+            throw new ApiException(ProtocolError::ParseError, internal: $e->getMessage(), previous: $e);
         }
     }
 

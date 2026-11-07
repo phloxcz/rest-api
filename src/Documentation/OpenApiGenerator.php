@@ -13,12 +13,14 @@ declare(strict_types=1);
 namespace Phlox\RestApi\Documentation;
 
 use Nette\Application\Response as ApplicationResponse;
-use Phlox\ApiCore\Documentation\ContentDefinition;
+use Nette\Http\FileUpload;
 use Phlox\ApiCore\Documentation\DocumentationConfig;
 use Phlox\ApiCore\Documentation\MethodReader;
 use Phlox\ApiCore\Documentation\SchemaBuilder;
+use Phlox\ApiCore\Schema\Binary;
 use Phlox\ApiCore\Types\DocComment;
 use Phlox\ApiCore\Types\Type;
+use Phlox\RestApi\Attributes\Consumes;
 use Phlox\RestApi\Attributes\Response;
 
 /**
@@ -26,7 +28,7 @@ use Phlox\RestApi\Attributes\Response;
  *
  * @phpstan-import-type PathParameter from RouteDescriber
  * @phpstan-import-type ParameterInfo from MethodReader
- * @phpstan-type RouteInfo array{verbs: list<string>, path: string, params: array<string, string>, class: class-string, method: string, authorize: bool, roles: list<list<string>>, consumes: list<string>, fromBody: array{name: string}|null}
+ * @phpstan-type RouteInfo array{verbs: list<string>, path: string, params: array<string, string>, class: class-string, method: string, authorize: bool, roles: list<list<string>>, consumes: list<string>, fromBody: array{name: string}|null, fromHeader: array<string, array{name: string, position: int}>, fromForm: array<string, array{name: string, position: int}>}
  */
 final class OpenApiGenerator
 {
@@ -69,7 +71,11 @@ final class OpenApiGenerator
         $this->securitySchemes = array_map(strval(...), array_keys($config->securitySchemes));
 
         foreach ($routes as $route) {
-            $this->addRoute($route);
+            try {
+                $this->addRoute($route);
+            } catch (\InvalidArgumentException $e) {
+                throw new \LogicException("Documentation of {$route['class']}::{$route['method']}(): {$e->getMessage()}", previous: $e);
+            }
         }
 
         $schemas = $this->builder->getSchemas() + ['Error' => self::errorSchema()];
@@ -110,7 +116,6 @@ final class OpenApiGenerator
         $tag = $this->addTag($class);
         $variants = RouteDescriber::describe($route['path'], $route['params']);
         $parameters = $method->getParameters();
-        $reflection = new \ReflectionMethod($route['class'], $route['method']);
 
         // Whatever the route takes from the path isn't anywhere else, even when a variant leaves it out
         $pathNames = [];
@@ -143,7 +148,7 @@ final class OpenApiGenerator
 
                 $inputs = $this->buildInputs($verb, $route, $variant['parameters'], $parameters, $pathNames);
                 $operation += $inputs;
-                $operation['responses'] = $this->buildResponses($reflection, $method, $route, $variant['parameters'], $parameters, $class, isset($inputs['requestBody']));
+                $operation['responses'] = $this->buildResponses($method, $route, $variant['parameters'], $parameters, isset($inputs['requestBody']));
 
                 $this->paths[$variant['template']][strtolower($verb)] = $operation;
             }
@@ -249,15 +254,31 @@ final class OpenApiGenerator
         $fromBody = $route['fromBody']['name'] ?? null;
         $others = array_filter(
             $parameters,
-            static fn(array $info): bool => !isset($allPathParameters[$info['name']]) && $info['name'] !== $fromBody,
+            static fn(array $info): bool => !isset($allPathParameters[$info['name']])
+                && $info['name'] !== $fromBody
+                && !isset($route['fromHeader'][$info['name']])
+                && !isset($route['fromForm'][$info['name']]),
         );
+
+        foreach ($route['fromHeader'] as $name => $header) {
+            if (isset($parameters[$name])) {
+                $info = $parameters[$name];
+                $list[] = self::withDescription(['name' => $header['name'], 'in' => 'header', 'required' => $info['required'], 'schema' => $info['schema']], $info['description']);
+            }
+        }
+
+        $takesJson = $route['consumes'] === [] || array_any($route['consumes'], self::isJsonType(...));
 
         if ($fromBody !== null && isset($parameters[$fromBody])) {
             $result['requestBody'] = self::buildFromBody($parameters[$fromBody], $route['consumes']);
+        } elseif ($route['fromForm'] !== []) {
+            $result['requestBody'] = self::buildForm($route['fromForm'], $parameters, $route['consumes']);
+        } elseif (!$takesJson) {
+            $result['requestBody'] = self::buildRawBody($route['consumes']);
         }
 
         // Without #[FromBody], these verbs take parameters from a JSON body
-        if ($fromBody === null && in_array($verb, self::BodyVerbs, true) && $others !== []) {
+        if (!isset($result['requestBody']) && $takesJson && in_array($verb, self::BodyVerbs, true) && $others !== []) {
             $result['requestBody'] = self::buildBodyFromParameters($others);
         } else {
             foreach ($others as $name => $info) {
@@ -311,11 +332,69 @@ final class OpenApiGenerator
         $content = [];
         foreach ($consumes ?: ['application/json'] as $type) {
             // Anything other than JSON reaches the parameter as it came
-            $isJson = $type === 'application/json' || str_ends_with($type, '+json');
-            $content[$type] = $isJson ? ['schema' => $info['schema']] : new \stdClass();
+            $content[$type] = self::isJsonType($type) ? ['schema' => $info['schema']] : new \stdClass();
         }
 
         return self::withDescription(['required' => $info['required'], 'content' => $content], $info['description']);
+    }
+
+    private static function isJsonType(string $type): bool
+    {
+        return $type === 'application/json' || str_ends_with($type, '+json');
+    }
+
+    /**
+     * A body the method reads itself, such as a streamed file.
+     *
+     * @param list<string> $consumes
+     * @return array<string, mixed>
+     */
+    private static function buildRawBody(array $consumes): array
+    {
+        $content = [];
+        foreach ($consumes as $type) {
+            $content[$type] = ['schema' => Consumes::isText($type) ? ['type' => 'string'] : ['type' => 'string', 'format' => 'binary']];
+        }
+
+        return ['required' => true, 'content' => $content];
+    }
+
+    /**
+     * @param array<string, array{name: string, position: int}> $fields Parameter => field
+     * @param array<string, ParameterInfo> $parameters
+     * @param list<string> $consumes
+     * @return array<string, mixed>
+     */
+    private static function buildForm(array $fields, array $parameters, array $consumes): array
+    {
+        $properties = [];
+        $required = [];
+        $hasFile = false;
+
+        foreach ($fields as $name => $field) {
+            $info = $parameters[$name] ?? null;
+            if ($info === null) {
+                continue;
+            }
+            $properties[$field['name']] = SchemaBuilder::extend($info['schema'], $info['description'] === '' ? [] : ['description' => $info['description']]);
+            if ($info['required']) {
+                $required[] = $field['name'];
+            }
+            $item = $info['type']->kind === Type::List ? $info['type']->items : $info['type'];
+            $hasFile = $hasFile || ($item !== null && $item->kind === Type::ClassName && is_a((string) $item->class, FileUpload::class, true));
+        }
+
+        $schema = ['type' => 'object', 'properties' => $properties ?: new \stdClass()] + ($required === [] ? [] : ['required' => $required]);
+
+        $content = [];
+        foreach ($consumes as $type) {
+            // Files can't travel in a URL-encoded form
+            if (!$hasFile || $type !== 'application/x-www-form-urlencoded') {
+                $content[$type] = ['schema' => $schema];
+            }
+        }
+
+        return ['required' => $required !== [], 'content' => $content];
     }
 
     /**
@@ -381,22 +460,18 @@ final class OpenApiGenerator
      * @param RouteInfo $route
      * @param array<string, PathParameter> $pathParameters
      * @param array<string, ParameterInfo> $parameters
-     * @param \ReflectionClass<object> $class
      * @return array<int|string, mixed>
      */
     private function buildResponses(
-        \ReflectionMethod $reflection,
         MethodReader $method,
         array $route,
         array $pathParameters,
         array $parameters,
-        \ReflectionClass $class,
         bool $hasBody,
     ): array {
         $declared = [];
-        foreach ($reflection->getAttributes(Response::class) as $attribute) {
-            $response = $attribute->newInstance();
-            $declared[$response->code] = $this->buildDeclaredResponse($response, $method, $class);
+        foreach ($method->getAttributes(Response::class) as $response) {
+            $declared[$response->code] = $this->buildDeclaredResponse($response, $method);
         }
 
         $hasSuccess = array_any(array_keys($declared), static fn(int $code): bool => $code >= 200 && $code < 300);
@@ -427,7 +502,7 @@ final class OpenApiGenerator
         }
 
         foreach ($method->getThrows() as $throws) {
-            $line = "`{$throws->code}`: {$throws->message}";
+            $line = $throws->errorCode === null ? $throws->message : "`{$throws->errorCode}`: {$throws->message}";
             $responses[$throws->httpCode] = isset($responses[$throws->httpCode]['description']) && !isset($declared[$throws->httpCode])
                 ? ['description' => $responses[$throws->httpCode]['description'] . "\n\n" . $line] + $responses[$throws->httpCode]
                 : self::errorResponse($line);
@@ -440,25 +515,27 @@ final class OpenApiGenerator
     }
 
     /**
-     * @param \ReflectionClass<object> $class
      * @return array<string, mixed>
      */
-    private function buildDeclaredResponse(Response $response, MethodReader $method, \ReflectionClass $class): array
+    private function buildDeclaredResponse(Response $response, MethodReader $method): array
     {
         $result = ['description' => $response->description ?? (string) $response->code];
         $isSuccess = $response->code >= 200 && $response->code < 300;
 
         if ($response->content === null) {
+            if ($response->code >= 400) {
+                return self::errorResponse($result['description']);
+            }
             $return = $method->getReturnType();
             if (!$isSuccess || $response->code === 204 || $return->kind === Type::Void || self::isApplicationResponse($return)) {
                 return $result;
             }
-            $schema = $method->getDescribedResponse() ?? $this->builder->build($return);
+            $schema = $method->getDescribedResponse() ?? $this->builder->build($return->withNullable(false));
         } else {
-            $schema = ContentDefinition::toSchema($response->content, $this->builder, $class);
+            $schema = $this->builder->buildDefinition($response->content);
         }
 
-        $type = $response->contentType ?? ($response->content === '@binary' ? 'application/octet-stream' : 'application/json');
+        $type = $response->contentType ?? ($response->content instanceof Binary ? 'application/octet-stream' : 'application/json');
         $result['content'] = [$type => ['schema' => $schema]];
 
         return $result;
@@ -470,26 +547,25 @@ final class OpenApiGenerator
     private function buildInferredResponses(MethodReader $method): array
     {
         $return = $method->getReturnType();
-        $description = $method->getReturnDescription();
 
         $described = $method->getDescribedResponse();
         if ($described !== null) {
             return [200 => [
-                'description' => $description ?: 'Success.',
+                'description' => 'Success.',
                 'content' => ['application/json' => ['schema' => $described]],
             ]];
         }
 
         if ($return->kind === Type::Void) {
-            return [204 => ['description' => $description ?: 'No content.']];
+            return [204 => ['description' => 'No content.']];
         }
 
         if (self::isApplicationResponse($return)) {
-            return [200 => ['description' => $description ?: 'A response sent by the application.']];
+            return [200 => ['description' => 'A response sent by the application.']];
         }
 
         $responses = [200 => [
-            'description' => $description ?: 'Success.',
+            'description' => 'Success.',
             'content' => ['application/json' => ['schema' => $this->builder->build($return->withNullable(false))]],
         ]];
 

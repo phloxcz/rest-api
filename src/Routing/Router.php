@@ -17,7 +17,7 @@ namespace Phlox\RestApi\Routing;
  *
  * @phpstan-import-type Check from ParamChecker
  * @phpstan-type HandlerData array{service: string, class: class-string<\Phlox\ApiCore\ApiController>, method: string, authorize: bool, roles: list<list<string>>}
- * @phpstan-type ControllerRoute array{handler: HandlerData, consumes: list<string>, fromBody: array{name: string, position: int, assoc: bool}|null}
+ * @phpstan-type ControllerRoute array{handler: HandlerData, consumes: list<string>, fromBody: array{name: string, position: int, assoc: bool}|null, fromHeader: array<string, array{name: string, position: int}>, fromForm: array<string, array{name: string, position: int}>}
  * @phpstan-type DocumentationRoute array{documentation: 'json'|'yaml'}
  * @phpstan-type Route ControllerRoute|DocumentationRoute
  * @phpstan-type RouteTable array{literal: array<string, array<string, Route>>, dynamic: list<array{regex: string, checks: array<string, list<Check>>, verbs: array<string, Route>}>}

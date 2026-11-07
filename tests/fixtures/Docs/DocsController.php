@@ -9,9 +9,12 @@ use Phlox\ApiCore\ApiController;
 use Phlox\ApiCore\Attributes\AllowAnonymous;
 use Phlox\ApiCore\Attributes\Authorize;
 use Phlox\ApiCore\Attributes\Constraints\Range;
-use Phlox\ApiCore\Attributes\Parameter;
 use Phlox\ApiCore\Attributes\Schema;
 use Phlox\ApiCore\Attributes\Throws;
+use Phlox\ApiCore\Schema\Binary;
+use Phlox\ApiCore\Schema\ListOf;
+use Phlox\ApiCore\Schema\Paged;
+use Phlox\ApiCore\Schema\Shape;
 use Phlox\RestApi\Attributes\Consumes;
 use Phlox\RestApi\Attributes\FromBody;
 use Phlox\RestApi\Attributes\HttpDelete;
@@ -35,11 +38,12 @@ class DocsController extends ApiController
      * With paging.
      *
      * @param int $page Which page
-     * @return list<UserDto> The users
+     * @return list<UserDto> Read by PHPStan, not by the documentation
      */
     #[HttpGet]
     #[Route('')]
     #[AllowAnonymous]
+    #[Response(200, new ListOf(UserDto::class), description: 'The users')]
     public function list(#[Range(min: 1)] int $page = 1, ?Role $role = null, array $filter = []): array
     {
         return [new UserDto($page, 'Ann', $role ?? Role::User, created: new \DateTimeImmutable('2024-01-02T03:04:05+00:00'))];
@@ -50,8 +54,8 @@ class DocsController extends ApiController
      */
     #[HttpGet]
     #[Route('{id:int:min(1)}')]
-    #[Throws(1001, 'The user is locked.', httpCode: 423)]
-    #[Throws(1002, 'The user is gone.', httpCode: 404)]
+    #[Throws(423, 'The user is locked.', errorCode: 1001)]
+    #[Throws(404, 'The user is gone.', errorCode: 1002)]
     public function detail(int $id): UserDto
     {
         return new UserDto($id, 'Ann');
@@ -104,7 +108,7 @@ class DocsController extends ApiController
 
     #[HttpGet]
     #[Route('{id:guid}/file')]
-    #[Response(200, '@binary', 'application/pdf', 'The file')]
+    #[Response(200, new Binary, 'application/pdf', 'The file')]
     public function file(string $id): ApplicationResponse
     {
         throw new \LogicException();
@@ -139,14 +143,22 @@ class DocsController extends ApiController
     }
 
     /**
-     * Older notation.
+     * Described by objects.
      */
     #[HttpPost]
-    #[Route('older')]
-    #[Parameter('filter', ['object', ['a' => 'int']])]
-    #[Response(200, ['@pager', 'UserDto'])]
-    #[Response(404, '@error', description: 'Nothing here')]
-    public function older(array $filter, #[Schema(['example' => 5])] int $limit = 5): array
+    #[Route('described')]
+    #[Response(200, new Shape(['value' => new Paged(UserDto::class), 'note?' => '?string']))]
+    #[Response(404, description: 'Nothing here')]
+    public function described(array $filter, #[Schema(['example' => 5])] int $limit = 5): array
+    {
+        return [];
+    }
+
+    #[HttpGet]
+    #[Route('summary')]
+    #[Response(200, 'int', description: 'A count')]
+    #[Response(302, description: 'Moved')]
+    public function summary(): array
     {
         return [];
     }

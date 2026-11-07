@@ -81,6 +81,7 @@ Assert::same(['anyOf' => [['$ref' => '#/components/schemas/Role'], ['type' => 'n
 Assert::false(isset($list['parameters'][1]['style']), 'an enum is a plain value');
 Assert::same('deepObject', $list['parameters'][2]['style'], 'filter[a]=1');
 Assert::same(['200', '422'], array_map(strval(...), array_keys($list['responses'])), 'public, so no 401');
+Assert::same('Success.', $paths['/users/{id}']['get']['responses'][200]['description'], 'no docblock is read for a response');
 Assert::same('The users', $list['responses'][200]['description']);
 Assert::same(
     ['type' => 'array', 'items' => ['$ref' => '#/components/schemas/UserDto']],
@@ -186,15 +187,40 @@ Assert::same(['anyOf' => [['type' => 'integer'], ['type' => 'string', 'format' =
 
 Assert::same(['$ref' => '#/components/schemas/Role'], $paths['/users/enum/{role}']['get']['parameters'][0]['schema'], 'a plain parameter is described by the method');
 
-// --- The older notation
+// --- Described by objects
 
-$older = $paths['/users/older']['post'];
-$body = $older['requestBody']['content']['application/json']['schema'];
-Assert::same(['type' => 'object', 'properties' => ['a' => ['type' => 'integer']]], $body['properties']['filter']);
+$described = $paths['/users/described']['post'];
+$body = $described['requestBody']['content']['application/json']['schema'];
 Assert::same(['example' => 5, 'default' => 5, 'type' => 'integer'], $body['properties']['limit']);
-Assert::same(['$ref' => '#/components/schemas/UserDto'], $older['responses'][200]['content']['application/json']['schema']['properties']['data']['items']);
-Assert::same('Nothing here', $older['responses'][404]['description']);
-Assert::same(['$ref' => '#/components/schemas/Error'], $older['responses'][404]['content']['application/json']['schema']);
+$value = $described['responses'][200]['content']['application/json']['schema'];
+Assert::same(['value'], $value['required'], 'note? can be left out');
+Assert::same(['type' => ['string', 'null']], $value['properties']['note']);
+Assert::same(['$ref' => '#/components/schemas/UserDto'], $value['properties']['value']['properties']['data']['items']);
+Assert::same(['integer', 'null'], $value['properties']['value']['properties']['from']['type']);
+Assert::same('Nothing here', $described['responses'][404]['description']);
+Assert::same(['$ref' => '#/components/schemas/Error'], $described['responses'][404]['content']['application/json']['schema'], 'an error gets the schema of errors');
+
+$summary = $paths['/users/summary']['get']['responses'];
+Assert::same(['type' => 'integer'], $summary[200]['content']['application/json']['schema']);
+Assert::same('A count', $summary[200]['description']);
+Assert::same(['description' => 'Moved'], $summary[302], 'a redirect has no body');
+
+// --- What's gone fails when the container compiles, naming the method and what to write
+
+$legacy = static fn(string $class): string => <<<NEON
+restApi:
+    endpoints:
+        api:
+            namespace: Phlox\\RestApi\\Tests\\Fixtures\\Legacy
+
+services:
+    - Phlox\\RestApi\\Tests\\Fixtures\\Legacy\\{$class}
+NEON;
+
+$e = Assert::exception(static fn() => createContainer($legacy('PagerController')), LogicException::class);
+Assert::same('Documentation of Phlox\\RestApi\\Tests\\Fixtures\\Legacy\\PagerController::list(): The array notation is gone, use new Paged(Foo::class).', $e->getMessage());
+$e = Assert::exception(static fn() => createContainer($legacy('TextController')), LogicException::class);
+Assert::contains("TextController::list(): Unknown type 'list<User>'. Types as text are gone;", $e->getMessage());
 
 // --- Schemas
 

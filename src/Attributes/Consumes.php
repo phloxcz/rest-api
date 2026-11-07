@@ -17,6 +17,9 @@ use Attribute;
 /**
  * A content type the method accepts; repeat it for more. `image/*` covers a
  * whole group. A request with a body of any other type gets HTTP 415.
+ *
+ * Without #[FromBody], the body stays unread, so the method can stream a large
+ * upload from php://input, and only its type is checked.
  */
 #[Attribute(Attribute::TARGET_METHOD | Attribute::IS_REPEATABLE)]
 final class Consumes
@@ -30,7 +33,7 @@ final class Consumes
         $this->bodyType = $bodyType ?? (self::isText($contentType) ? BodyType::Text : BodyType::Binary);
     }
 
-    private static function isText(string $contentType): bool
+    public static function isText(string $contentType): bool
     {
         return str_starts_with($contentType, 'text/')
             || str_ends_with($contentType, '+json')

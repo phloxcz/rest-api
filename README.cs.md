@@ -122,6 +122,44 @@ public function upload(int $id, #[FromBody] string $content): void { /* ... */ }
 
 `#[Consumes]` vyjmenovává přijímané typy obsahu. Tělo jiného typu dostane `415`. Metoda s `#[FromBody]` bez `#[Consumes]` přijímá `application/json`, metoda bez obojího přijímá cokoli.
 
+Bez `#[FromBody]` kontroluje `#[Consumes]` jen typ a tělo zůstane nenačtené, aby ho metoda mohla streamovat. Dokumentace pak tělo popíše jako soubor:
+
+```php
+#[HttpPost]
+#[Route('{id:int}/attachment')]
+#[Consumes('application/octet-stream')]
+public function attach(int $id): array
+{
+    $bytes = stream_copy_to_stream(fopen('php://input', 'rb'), fopen($this->storage->path($id), 'wb'));
+    // ...
+}
+```
+
+### Hlavičky a formuláře
+
+`#[FromHeader]` naplní parametr hlavičkou a `#[FromForm]` polem odeslaného formuláře, `multipart/form-data` nebo `application/x-www-form-urlencoded`. Soubor přijde jako `Nette\Http\FileUpload`:
+
+```php
+/** @param list<FileUpload> $attachments */
+#[HttpPost]
+#[Route('{id:int}/document')]
+public function document(
+    int $id,
+    #[FromForm] FileUpload $file,
+    #[FromForm] ?string $note = null,
+    #[FromForm('attachment')] array $attachments = [],
+    #[FromHeader('X-Request-Id')] ?string $requestId = null,
+): array { /* ... */ }
+```
+
+- **Názvy:** vlastní název parametru, nebo zadaný. Hlavička bez něj se odvodí z parametru, takže `$ifMatch` čte `If-Match`, bez ohledu na velikost písmen.
+- **Hodnoty** se převádějí stejně jako parametry z query. Chybějící je jako neposlaná: výchozí hodnota, null, nebo `422` s `is required.`
+- **Soubory:** prázdný souborový vstup je jako neposlaný. Příliš velký soubor dostane `422` s `is too large.`, vadný upload `could not be uploaded.`
+- **Jen odtud:** parametr z query ani pole JSON se stejným názvem je nikdy nenaplní.
+- **Typ obsahu:** metoda s `#[FromForm]` bez `#[Consumes]` přijímá oba typy formulářů a na cokoli jiného vrací `415`. Nemůže mít zároveň `#[FromBody]`.
+
+PHP čte formuláře jen u požadavků `POST`.
+
 DTO může být celé tělo nebo jeden z parametrů. Viz [DTO](https://github.com/phloxcz/api-core/blob/master/README.cs.md#dto).
 
 ```php
@@ -167,7 +205,7 @@ public function create(#[FromBody] SaveType $type, #[QueryOf(TypeResource::class
             'name' => $type->name,
         ]);
     } catch (UniqueConstraintViolationException) {
-        throw new ApiException(409, "Type '{$type->ident}' already exists.", httpCode: 409);
+        throw new ApiException(409, "Type '{$type->ident}' already exists.");
     }
 
     $this->response->setCode(201);
@@ -207,7 +245,7 @@ public function replace(int $id, #[FromBody] SaveType $type, #[QueryOf(TypeResou
 private function findType(int $id): Type
 {
     return $this->db->table('type')->get($id)
-        ?? throw new ApiException(404, 'Type not found.', httpCode: 404);
+        ?? throw new ApiException(404, 'Type not found.');
 }
 ```
 
@@ -236,10 +274,9 @@ public function change(int $id, #[FromBody, PatchOf(SaveType::class)] Patch $cha
 DTO drží seznam pomocí docblocku, viz [Kolekce](https://github.com/phloxcz/api-core/blob/master/README.cs.md#kolekce). Aby se uložilo všechno, nebo nic, použijte transakci:
 
 ```php
-/** @return array{ids: list<int>} */
 #[HttpPost]
 #[Route('batch')]
-#[Response(201)]
+#[Response(201, new Shape(['ids' => new ListOf('int')]))]
 public function batch(#[FromBody] ImportTypes $import): array
 {
     $ids = $this->db->transaction(static function (Explorer $db) use ($import): array {
@@ -285,15 +322,17 @@ Chyby mají tvar `{"error": {"code": -32601, "message": "..."}}` a `data` z `Api
 
 | Situace | HTTP stav | `code` |
 |---|---|---|
-| neznámá cesta | `404` | `-32601` |
-| špatné sloveso, s hlavičkou `Allow` | `405` | `-32601` |
+| neznámá cesta | `404` | `404` |
+| špatné sloveso, s hlavičkou `Allow` | `405` | `405` |
 | chybný JSON | `400` | `-32700` |
-| nepodporovaný typ obsahu | `415` | `-32600` |
+| nepodporovaný typ obsahu | `415` | `415` |
 | neplatné parametry | `422` | `-32602` |
 | nepřihlášený | `401` | `401` |
 | chybějící role | `403` | `403` |
 | neočekávaná výjimka (zaloguje se, detaily se skryjí) | `500` | `-32603` |
-| `ApiException` | její `httpCode`, u vlastních kódů výchozí `500` | její kód |
+| `ApiException` | její stav | její `errorCode`, nebo stav |
+
+Chybný JSON, neplatné parametry a neočekávaná výjimka si nechávají kódy JSON-RPC, který je sdílí, viz [Chyby](https://github.com/phloxcz/api-core/blob/master/README.cs.md#chyby).
 
 Typ obsahu a syntaxe JSON se kontrolují před autorizací, takže tyhle dvě chyby může dostat i nepřihlášený klient. Parametry se kontrolují až po ní.
 
@@ -319,24 +358,30 @@ Navíc REST sám dokumentuje:
 - **Cesty:** routa s nepovinným parametrem se stane cestou pro každou kombinaci, protože OpenAPI nepovinné parametry cesty nezná.
 - **Parametry cesty:** typy a omezení routy, takže `{id:int:min(1)}` je celé číslo s `minimum: 1` a `{id:guid}` má `format: uuid`.
 - **Ostatní parametry:** v query, kromě `POST`, `PUT` a `PATCH` bez `#[FromBody]`, kde jsou to vlastnosti JSON těla.
-- **Odpovědi:** návratový typ, `204` pro nic a u `?Foo` obojí.
+- **Odpovědi:** nativní návratový typ nebo `#[QueryOf]`, `204` pro nic a u `?Foo` obojí.
 - **Chyby:** `400`, `401`, `403`, `404`, `415` a `422` všude, kde mohou nastat.
 - **Zabezpečení:** se `securitySchemes` uvede metoda vyžadující přihlášení všechna schémata jako alternativy a veřejná má `security: []`. Role zůstávají v `x-roles` a popisu, protože požadavek na zabezpečení neumí vyjádřit „admin nebo editor".
 
-`#[Response]` přidává to, co nejde vyčíst ze signatury, a úspěšná odpověď uvedená v něm nahradí tu z návratového typu:
+`#[Response]` přidává to, co metoda sama neřekne, a úspěšná odpověď uvedená v něm nahradí tu vyčtenou z metody:
 
 ```php
+use Phlox\ApiCore\Schema\{Binary, Paged, Shape};
+
+#[HttpGet]
+#[Response(200, new Shape(['value' => new Paged(User::class)]))]
+public function list(?Query $query = null): array { /* ... */ }
+
 #[HttpPost]
 #[Response(201)]                                     // návratový typ s jiným kódem
 public function create(#[FromBody] CreateUser $input): UserOutput { /* ... */ }
 
 #[HttpGet]
-#[Response(200, '@binary', 'application/pdf', 'The invoice')]
-#[Response(404, '@error', description: 'No such invoice')]
+#[Response(200, new Binary, 'application/pdf', 'The invoice')]
+#[Response(404, description: 'No such invoice')]     // kód od 400 dostane schéma chyb
 public function download(int $id): FileResponse { /* ... */ }
 ```
 
-Obsah `#[Response]` je typ jako v docblocku (`list<UserOutput>`), JSON Schema, `@binary` nebo `@error`.
+Obsahem `#[Response]` je třída, skalár, nebo objekt jako `new ListOf(...)`, `new Shape([...])` či `new Paged(...)`, viz [Popis odpovědi](https://github.com/phloxcz/api-core/blob/master/README.cs.md#popis-odpovědi). Docblock `@return` se nečte.
 
 Dokud je dokument zveřejněný, vlastní routa na stejné cestě selže při kompilaci kontejneru. V takovém případě změňte `path`.
 
@@ -382,15 +427,16 @@ Změny, které je potřeba v existujícím projektu zkontrolovat:
 - **`#[Authorize(['a', 'b'])]` teď znamená a nebo b, takže pustí víc uživatelů než dřív.** Kde jsou potřeba obě role, napište `#[Authorize(['a', 'b'], all: true)]`. Atributy na třídě a metodě musí dál platit společně.
 - **Sloveso je povinné.** Metoda bez slovesa dřív přijímala jakékoli. Teď není endpoint, a pokud má `#[Route]`, kontejner se nezkompiluje.
 - **Zděděné metody už nejsou vystavené.** Metodu ze společného základního kontroleru je potřeba přepsat v konkrétním kontroleru.
-- **`ApiException` má jiné pořadí argumentů.** Čtvrtý poziční argument byl `$httpCode`, teď je to `$previous`. Použijte pojmenované `httpCode:`.
+- **`ApiException` bere jako první HTTP stav:** `new ApiException(404, 'Not found.')`, s vlastním kódem v `errorCode:`. Kód na místě stavu, jako v `new ApiException(1001, 'x')`, skončí chybou se správným zápisem ve zprávě. Totéž platí pro `#[Throws]`.
+- **Chyby routování mají jako kód svůj stav:** neznámá cesta `404`, špatné sloveso `405` a nepodporovaný typ obsahu `415`, dřív to bylo `-32601` a `-32600`.
 - **Změnily se stavové kódy.** Chyby, které byly ve výchozím stavu `500`, jsou teď `400`, `404`, `405`, `415` nebo `422`, viz výše. Metoda bez hodnoty vrací `204` místo prázdného `200`.
 - **Routy jsou přísnější.** Cesty a výrazy `regex` rozlišují velikost písmen (změníte to tím, že výraz začnete `(?i)`), cesta kontroleru musí končit na hranici segmentu a neznámý token jako `{id:imt}` selže, místo aby se ignoroval. Regulární výraz v doslovném textu, jako `(users|people)/{id}`, také selže a musí se přesunout do parametru `regex`.
-- **`#[Consumes]` se vynucuje,** dřív sloužil jen pro dokumentaci a dekódování JSON.
+- **`#[Consumes]` se vynucuje,** dřív sloužil jen pro dokumentaci a dekódování JSON. Bez `#[FromBody]` už tělo nenačítá.
 - **Parametry cesty jsou dekódované z URL.**
 - **CORS:** `allowedOrigins: ['*']` s `allowCredentials: true` musí být nahrazené seznamem originů.
 - **Bootstrap běží před API.** Kód za `createContainer()` se teď spouští i pro požadavky na API, včetně věcí jako přesměrování nebo režim údržby. `index.php` musí volat `Application::run()`.
 - **Data a časy:** samotné časové pásmo, jako `x` nebo `utc`, se teď odmítne, místo aby znamenalo aktuální čas.
-- **Dokumentace:** konfigurace `openapi` s `content` a `outputPath` je pryč. `info` a `securitySchemes` přesuňte do `documentation`, cokoli dalšího do `documentation.extra` a soubory, pokud je potřebujete, zapisujte přes `OpenApi::toYaml()`. `#[Response]` se přesouvá do `Phlox\RestApi\Attributes\Response`. `#[Parameter]` se přesouvá do `Phlox\ApiCore\Attributes\Parameter` a je zastaralý, protože totéž řekne docblock nebo `#[Schema]`. Zápis polem jako `['object', ['id' => 'int']]` funguje v obou dál, ale také je zastaralý ve prospěch DTO a typů v docblocku.
+- **Dokumentace:** konfigurace `openapi` s `content` a `outputPath` je pryč. `info` a `securitySchemes` přesuňte do `documentation`, cokoli dalšího do `documentation.extra` a soubory, pokud je potřebujete, zapisujte přes `OpenApi::toYaml()`. `#[Response]` se přesouvá do `Phlox\RestApi\Attributes\Response` a jeho obsahem je místo zápisu polem, `@pager`, `@binary` a `@error` objekt jako `new Shape([...])` nebo `new Paged(Foo::class)`. `#[Parameter]` je pryč, protože totéž řekne typ parametru, docblock nebo `#[Schema]`. Co je pryč, skončí při kompilaci kontejneru chybou, která řekne, co napsat, viz [Dokumentace](https://github.com/phloxcz/api-core/blob/master/MIGRATION.cs.md#7-dokumentace) v návodu k migraci.
 - **Dotazovací jazyk** se přesunul do [`phloxcz/api-query`](https://github.com/phloxcz/api-query/blob/master/README.cs.md#přechod-z-abrad450api-server-nette), včetně `$this->processor`.
 
 ## Licence

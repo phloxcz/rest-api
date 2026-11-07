@@ -64,6 +64,38 @@ namespace Phlox\RestApi\Tests\Fixtures\Invalid\TwoBodies {
     }
 }
 
+namespace Phlox\RestApi\Tests\Fixtures\Invalid\BodyAndForm {
+
+    use Phlox\ApiCore\ApiController;
+    use Phlox\RestApi\Attributes\FromBody;
+    use Phlox\RestApi\Attributes\FromForm;
+    use Phlox\RestApi\Attributes\HttpPost;
+
+    class AController extends ApiController
+    {
+        #[HttpPost]
+        public function both(#[FromBody] array $a, #[FromForm] string $b): void
+        {
+        }
+    }
+}
+
+namespace Phlox\RestApi\Tests\Fixtures\Invalid\HeaderAndForm {
+
+    use Phlox\ApiCore\ApiController;
+    use Phlox\RestApi\Attributes\FromForm;
+    use Phlox\RestApi\Attributes\FromHeader;
+    use Phlox\RestApi\Attributes\HttpPost;
+
+    class AController extends ApiController
+    {
+        #[HttpPost]
+        public function both(#[FromHeader, FromForm] string $a): void
+        {
+        }
+    }
+}
+
 namespace Phlox\RestApi\Tests\Fixtures\Invalid\BadToken {
 
     use Phlox\ApiCore\ApiController;

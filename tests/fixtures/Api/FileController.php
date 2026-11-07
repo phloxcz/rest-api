@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace Phlox\RestApi\Tests\Fixtures\Api;
 
 use Nette\Application\Responses\TextResponse;
+use Nette\Http\FileUpload;
 use Phlox\ApiCore\ApiController;
 use Phlox\ApiCore\Attributes\AllowAnonymous;
 use Phlox\RestApi\Attributes\Consumes;
 use Phlox\RestApi\Attributes\FromBody;
+use Phlox\RestApi\Attributes\FromForm;
+use Phlox\RestApi\Attributes\FromHeader;
 use Phlox\RestApi\Attributes\HttpGet;
 use Phlox\RestApi\Attributes\HttpPost;
 use Phlox\RestApi\Attributes\Route;
@@ -85,6 +88,57 @@ class FileController extends ApiController
     public function noConsumes(): array
     {
         return ['jsonData' => $this->jsonData];
+    }
+
+    /** Streams the body itself, with only its type checked */
+    #[HttpPost]
+    #[Route('streamed')]
+    #[Consumes('application/octet-stream')]
+    public function streamed(string $name = 'default'): array
+    {
+        return ['name' => $name];
+    }
+
+    #[HttpGet]
+    #[Route('headers')]
+    public function headers(#[FromHeader('X-Request-Id')] ?string $requestId = null, #[FromHeader] int $maxItems = 10): array
+    {
+        return ['requestId' => $requestId, 'maxItems' => $maxItems];
+    }
+
+    #[HttpGet]
+    #[Route('if-match')]
+    public function ifMatch(#[FromHeader] string $ifMatch): string
+    {
+        return $ifMatch;
+    }
+
+    /**
+     * @param list<FileUpload> $attachments
+     */
+    #[HttpPost]
+    #[Route('form')]
+    public function form(
+        #[FromForm] FileUpload $file,
+        #[FromForm] string $title,
+        #[FromForm] int $pages = 1,
+        #[FromForm] ?FileUpload $preview = null,
+        #[FromForm('attachment')] array $attachments = [],
+    ): array {
+        return [
+            'file' => $file->getUntrustedName(),
+            'title' => $title,
+            'pages' => $pages,
+            'preview' => $preview?->getUntrustedName(),
+            'attachments' => array_map(static fn(FileUpload $upload): string => $upload->getUntrustedName(), $attachments),
+        ];
+    }
+
+    #[HttpPost]
+    #[Route('fields')]
+    public function fields(#[FromForm] string $title): string
+    {
+        return $title;
     }
 
     #[HttpGet]
