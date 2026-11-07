@@ -252,6 +252,14 @@ Assert::same($openApi->toYaml('api'), $yaml->data);
 Assert::same('application/yaml', $yaml->rawContentType);
 Assert::same(405, $dispatcher->handle('api', 'POST', 'openapi.json')->status);
 
+// Swagger UI, at the same name without an extension, reading the document next to it
+$ui = $dispatcher->handle('api', 'GET', 'openapi');
+Assert::same('text/html; charset=utf-8', $ui->rawContentType);
+Assert::contains('<title>Users</title>', $ui->data);
+Assert::contains('src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"', $ui->data);
+Assert::contains('href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/swagger-ui.css"', $ui->data);
+Assert::contains('url: "openapi.json"', $ui->data, 'relative, so it works under any base path');
+
 // --- Whether it's served
 
 $config = static fn(string $documentation): string => <<<NEON
@@ -275,8 +283,15 @@ Assert::same([['admin', 'editor']], json_decode($hidden->getByType(OpenApi::clas
 $shown = createContainer($config('{}') . "\n", debugMode: true);
 Assert::same('application/json', $shown->getByType(Dispatcher::class)->handle('api', 'GET', 'openapi.json')->rawContentType, 'published in debug mode');
 
-$moved = createContainer($config('{expose: true, path: docs/spec, servers: [{url: "https://api.example.com"}]}'));
+$moved = createContainer($config('{expose: true, path: docs/spec, servers: [{url: "https://api.example.com"}], uiAssets: "https://intranet.example.com/swagger-ui/"}'));
 Assert::same('application/yaml', $moved->getByType(Dispatcher::class)->handle('api', 'GET', 'docs/spec.yaml')->rawContentType);
+$movedUi = $moved->getByType(Dispatcher::class)->handle('api', 'GET', 'docs/spec')->data;
+Assert::contains('url: "spec.json"', $movedUi, 'the UI follows the path');
+Assert::contains('src="https://intranet.example.com/swagger-ui/swagger-ui-bundle.js"', $movedUi, 'scripts from where they are, such as an intranet');
+
+$noUi = createContainer($config('{expose: true, ui: false}') . "\n\n\n");
+Assert::same(404, $noUi->getByType(Dispatcher::class)->handle('api', 'GET', 'openapi')->status, 'the UI can be left out');
+Assert::same('application/json', $noUi->getByType(Dispatcher::class)->handle('api', 'GET', 'openapi.json')->rawContentType, 'and the document stays');
 Assert::same('https://api.example.com', json_decode($moved->getByType(OpenApi::class)->toJson('api'))->servers[0]->url);
 
 $off = createContainer($config('{enabled: false, expose: true}'));

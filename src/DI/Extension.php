@@ -50,6 +50,9 @@ use ReflectionUnionType;
  */
 final class Extension extends Nette\DI\CompilerExtension
 {
+    /** Swagger UI on jsDelivr, at a fixed version */
+    public const SwaggerUi = 'https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14';
+
     private bool $hookedToApplication = false;
 
     public function getConfigSchema(): Nette\Schema\Schema
@@ -68,6 +71,8 @@ final class Extension extends Nette\DI\CompilerExtension
                     'documentation' => DocumentationConfig::getSchema([
                         'path' => Expect::string('openapi'),
                         'securitySchemes' => Expect::array(),
+                        'ui' => Expect::bool(true),
+                        'uiAssets' => Expect::string(self::SwaggerUi),
                     ]),
                 ]),
                 'string',
@@ -140,7 +145,7 @@ final class Extension extends Nette\DI\CompilerExtension
 
             if ($endpoint->documentation->enabled) {
                 $documents[$name] = $this->generateDocument($builder, (string) $name, $endpoint->documentation, $routes);
-                $this->exposeDocument($builder, $table, $endpoint->documentation);
+                $this->exposeDocument($builder, $table, $endpoint->documentation, (string) $name);
             }
 
             $endpoints[$name] = [
@@ -187,7 +192,7 @@ final class Extension extends Nette\DI\CompilerExtension
      * Served as ordinary routes, so a clash with a controller's route is refused
      * like any other. Published only in debug mode unless configured otherwise.
      */
-    private function exposeDocument(Nette\DI\ContainerBuilder $builder, RouteTableBuilder $table, \stdClass $config): void
+    private function exposeDocument(Nette\DI\ContainerBuilder $builder, RouteTableBuilder $table, \stdClass $config, string $endpoint): void
     {
         if (!($config->expose ?? $builder->parameters['debugMode'] ?? false)) {
             return;
@@ -196,6 +201,41 @@ final class Extension extends Nette\DI\CompilerExtension
         $path = trim($config->path, '/');
         $table->add(['GET'], "{$path}.json", [], ['documentation' => 'json'], 'the OpenAPI document');
         $table->add(['GET'], "{$path}.yaml", [], ['documentation' => 'yaml'], 'the OpenAPI document');
+
+        if ($config->ui) {
+            $page = self::buildSwaggerUi(basename($path) . '.json', DocumentationConfig::buildInfo($config->info, $endpoint)['title'], $config->uiAssets);
+            $table->add(['GET'], $path, [], ['documentation' => 'ui', 'page' => $page], 'Swagger UI of the OpenAPI document');
+        }
+    }
+
+    /**
+     * Swagger UI reading the document next to it. Its scripts come from a CDN, or from
+     * `uiAssets` for a network with no way out.
+     */
+    private static function buildSwaggerUi(string $document, string $title, string $assets): string
+    {
+        $assets = rtrim($assets, '/');
+        $e = static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES | ENT_HTML5);
+        $documentJs = json_encode($document, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_THROW_ON_ERROR);
+
+        return <<<HTML
+            <!doctype html>
+            <html lang="en">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>{$e($title)}</title>
+                <link rel="stylesheet" href="{$e($assets)}/swagger-ui.css">
+            </head>
+            <body>
+                <div id="swagger-ui"></div>
+                <script src="{$e($assets)}/swagger-ui-bundle.js"></script>
+                <script>
+                    window.ui = SwaggerUIBundle({url: {$documentJs}, dom_id: '#swagger-ui', deepLinking: true, persistAuthorization: true});
+                </script>
+            </body>
+            </html>
+            HTML;
     }
 
     /**

@@ -338,7 +338,7 @@ Typ obsahu a syntaxe JSON se kontrolují před autorizací, takže tyhle dvě ch
 
 ## OpenAPI
 
-Každý endpoint dostane dokument OpenAPI 3.1, vygenerovaný při kompilaci kontejneru ze stejných rout, podle kterých server běží. V debug režimu je zveřejněný na `/api/openapi.json` a `/api/openapi.yaml`. Z čeho se skládá, popisuje [`phloxcz/api-core`](https://github.com/phloxcz/api-core/blob/master/README.cs.md#dokumentace).
+Každý endpoint dostane dokument OpenAPI 3.1, vygenerovaný při kompilaci kontejneru ze stejných rout, podle kterých server běží. V debug režimu je zveřejněný na `/api/openapi.json` a `/api/openapi.yaml` a [Swagger UI](https://swagger.io/tools/swagger-ui/) na `/api/openapi`, kde ho lze číst a endpointy zkoušet v prohlížeči. Z čeho se skládá, popisuje [`phloxcz/api-core`](https://github.com/phloxcz/api-core/blob/master/README.cs.md#dokumentace).
 
 ```neon
 restApi:
@@ -347,7 +347,9 @@ restApi:
             namespace: App\ApiModule
             documentation:
                 expose: true        # ve výchozím stavu jen v debug režimu
-                path: openapi       # dá /api/openapi.json a /api/openapi.yaml
+                path: openapi       # dá /api/openapi.json, /api/openapi.yaml a Swagger UI na /api/openapi
+                ui: true            # Swagger UI; false ho vynechá
+                # uiAssets: https://intranet.example.com/swagger-ui   # odkud jsou jeho skripty; ve výchozím stavu jsDelivr
                 info: {title: Orders API, version: 2.1.0}
                 securitySchemes:
                     bearerAuth: {type: http, scheme: bearer}

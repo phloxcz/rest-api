@@ -338,7 +338,7 @@ The content type and JSON syntax are checked before authorization, so these two 
 
 ## OpenAPI
 
-Every endpoint gets an OpenAPI 3.1 document, generated when the container compiles from the same routes the server runs on. In debug mode it's published at `/api/openapi.json` and `/api/openapi.yaml`. What it's made of is described in [`phloxcz/api-core`](https://github.com/phloxcz/api-core#documentation).
+Every endpoint gets an OpenAPI 3.1 document, generated when the container compiles from the same routes the server runs on. In debug mode it's published at `/api/openapi.json` and `/api/openapi.yaml`, and [Swagger UI](https://swagger.io/tools/swagger-ui/) at `/api/openapi`, to read it and try the endpoints in a browser. What it's made of is described in [`phloxcz/api-core`](https://github.com/phloxcz/api-core#documentation).
 
 ```neon
 restApi:
@@ -347,7 +347,9 @@ restApi:
             namespace: App\ApiModule
             documentation:
                 expose: true        # by default only in debug mode
-                path: openapi       # gives /api/openapi.json and /api/openapi.yaml
+                path: openapi       # gives /api/openapi.json, /api/openapi.yaml and Swagger UI at /api/openapi
+                ui: true            # Swagger UI; false leaves it out
+                # uiAssets: https://intranet.example.com/swagger-ui   # where its scripts are; by default jsDelivr
                 info: {title: Orders API, version: 2.1.0}
                 securitySchemes:
                     bearerAuth: {type: http, scheme: bearer}

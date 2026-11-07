@@ -83,9 +83,11 @@ final class Dispatcher
             $route = $match->route;
 
             if (isset($route['documentation'])) {
-                return $route['documentation'] === 'yaml'
-                    ? new Result($this->documents->toYaml($endpoint), rawContentType: 'application/yaml')
-                    : new Result($this->documents->toJson($endpoint), rawContentType: 'application/json');
+                return match ($route['documentation']) {
+                    'yaml' => new Result($this->documents->toYaml($endpoint), rawContentType: 'application/yaml'),
+                    'ui' => new Result($route['page'], rawContentType: 'text/html; charset=utf-8'),
+                    default => new Result($this->documents->toJson($endpoint), rawContentType: 'application/json'),
+                };
             }
 
             $type = self::normalizeContentType($contentType);
